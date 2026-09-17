@@ -17,8 +17,8 @@ Nothing gets coded until its note is read.
 | 0 | [The mental model](notes/00_overview.md) | — (read first) | [x] written |
 | 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `dataset.py` | [x] **built, 25 tests pass** |
 | 2 | [Attention](notes/02_attention.md) | `attention.py` `config.py` | [x] **built, 25 tests pass** |
-| 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [ ] |
-| 4 | [The whole model](notes/04_the_model.md) | `config.py` `model.py` | [ ] |
+| 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [x] **built, 27 tests pass** |
+| 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [ ] |
 | 5 | [Training](notes/05_training.md) | `train.py` `optim.py` | [ ] |
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [ ] |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [ ] |

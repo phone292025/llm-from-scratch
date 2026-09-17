@@ -103,13 +103,32 @@ Both live in `norms.py`, selected by `cfg.norm`, so v2 flips a flag.
 `h = h + sublayer(h)`, not `h = sublayer(h)`. One `+`, and without it deep transformers do not
 train at all.
 
-The gradient explanation is the honest one. Differentiating `h + f(h)` gives `1 + f'(h)`. That
-**`1`** means gradient flows backward through the addition unchanged, no matter what `f` does. The
-residual stream is a gradient highway running from the loss all the way to the embeddings, with
-each block contributing a side road.
+The gradient explanation. Differentiating `h + f(h)` gives `1 + f'(h)`. That **`1`** means gradient
+flows backward through the addition unchanged, no matter what `f` does. The residual stream is a
+gradient highway running from the loss all the way to the embeddings, with each block contributing
+a side road.
 
 Without it, gradients pass through twelve chained multiplications. Each is slightly less than one,
 and `0.8^12 ≈ 0.07` — early layers receive almost no signal and never learn.
+
+**Measured, because the usual telling of this is too strong.** Gradient magnitude at layer 0 of a
+12-block stack, relative to layer 11:
+
+| Stack | grad at layer 0 | ratio to layer 11 |
+|---|---|---|
+| pre-norm + residual | 1.6e+00 | 1.3× |
+| normalization, **no** residual | 1.8e+00 | 1.0× |
+| **neither** | **1.0e-14** | **9e-14×** |
+
+Residuals and normalization are **partly redundant** for gradient flow. With LayerNorm still in
+place, removing the residual connections barely moves the gradient at layer 0 — normalization
+rescales the signal at every layer, which by itself stops the geometric decay. It is losing *both*
+that collapses the gradient, by fourteen orders of magnitude.
+
+So the accurate claim is not "residuals prevent vanishing gradients" but "a deep stack needs at
+least one mechanism that resists geometric decay, and modern transformers have two." Residuals
+still earn their place for the other reason below — and because they make the identity the default
+behaviour, which normalization does not.
 
 The representational view is equally useful: the residual stream is the model's working memory,
 and each block **reads from it, computes, and adds a correction back**. A block that has nothing
@@ -117,9 +136,9 @@ useful to contribute can output near-zero and get out of the way. This is why tr
 gracefully when layers are removed, and why the identity function is the easy default rather than
 something the model must learn.
 
-**Demo worth running:** build a 5-layer net with and without residuals, backprop once, and print
-the gradient magnitude per layer. Without residuals the first layer's gradient is orders of
-magnitude smaller than the last. It is a 20-line script and it makes the abstract concrete.
+**Demo worth running:** `scripts/demo_03.py` prints gradient magnitude per layer for all three
+stacks above, plus the same experiment on a plain 20-layer MLP where normalization is absent and
+residuals are therefore the *only* thing holding the gradient up.
 
 ## 5. Pre-norm vs post-norm
 
