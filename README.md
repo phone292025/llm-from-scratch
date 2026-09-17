@@ -16,7 +16,7 @@ Nothing gets coded until its note is read.
 |---|------|--------|--------|
 | 0 | [The mental model](notes/00_overview.md) | — (read first) | [x] written |
 | 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `dataset.py` | [x] **built, 25 tests pass** |
-| 2 | [Attention](notes/02_attention.md) | `attention.py` | [ ] |
+| 2 | [Attention](notes/02_attention.md) | `attention.py` `config.py` | [x] **built, 25 tests pass** |
 | 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [ ] |
 | 4 | [The whole model](notes/04_the_model.md) | `config.py` `model.py` | [ ] |
 | 5 | [Training](notes/05_training.md) | `train.py` `optim.py` | [ ] |

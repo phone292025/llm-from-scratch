@@ -198,9 +198,14 @@ For `GPT2_124M` (d=768, L=12, V=50257, T=1024):
 | **one block** | | **7,087,872** |
 | twelve blocks | | 85,054,464 |
 | final layernorm | 2d | 1,536 |
-| **total, untied** | | **163,009,536** |
+| **total, untied** | | **163,037,184** |
 | minus tied output head | V × d | −38,597,376 |
-| **total, tied — the "124M"** | | **124,412,160** |
+| **total, tied — the "124M"** | | **124,439,808** |
+
+> Raschka's book reports 163,009,536 instead, which is 27,648 lower — exactly 12 layers ×
+> 2,304, the QKV bias. His default config sets `qkv_bias=False`. Real GPT-2 *does* have that
+> bias, and it is required for weight loading, so our default is `qkv_bias=True` and the numbers
+> above are the ones to match. 124,439,808 is also what HuggingFace reports for `gpt2`.
 
 Two things fall out of this table:
 

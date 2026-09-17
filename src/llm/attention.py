@@ -1,0 +1,227 @@
+"""Causal self-attention.
+
+The only operation in the whole model that moves information between positions.
+
+The file contains five classes. The first three are a teaching ladder, each fixing a flaw in the
+one before, and they are kept rather than deleted because the progression is the explanation.
+`CausalSelfAttention` is the one the model actually uses.
+
+See notes/02_attention.md.
+"""
+
+from __future__ import annotations
+
+import math
+
+import torch
+import torch.nn.functional as F
+from torch import Tensor, nn
+
+from llm.config import SMALL, ModelConfig
+
+
+def causal_mask(seq_len: int, device=None) -> Tensor:
+    """True where attention must be blocked: strictly above the diagonal, i.e. the future."""
+    return torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool, device=device), diagonal=1)
+
+
+# --- the teaching ladder ----------------------------------------------------------------------
+
+
+class NaiveAttention(nn.Module):
+    """Stage 1: similarity with no parameters at all.
+
+    Dot every input vector against every other. This works a little, because the dot product is
+    large for vectors pointing the same way -- but there is nothing to learn, and it can only ever
+    express "attend to things like me". A pronoun does not want another pronoun; it wants a noun.
+    """
+
+    def forward(self, x: Tensor) -> Tensor:
+        weights = torch.softmax(x @ x.transpose(-2, -1), dim=-1)
+        return weights @ x
+
+
+class SingleHeadAttention(nn.Module):
+    """Stages 2-4: learned projections, scaling, and the causal mask.
+
+    Three matrices let the model decide what to look for separately from what it is. W_q and W_k
+    being different is what makes attention directional: A can attend to B without B attending
+    to A.
+    """
+
+    def __init__(
+        self,
+        d_in: int,
+        d_out: int,
+        context_length: int,
+        dropout: float = 0.0,
+        qkv_bias: bool = False,
+    ) -> None:
+        super().__init__()
+        self.d_out = d_out
+        self.W_q = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_k = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_v = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.dropout = nn.Dropout(dropout)
+        # Not persistent: derived from config, so it should follow .to(device) but stay out of
+        # the checkpoint.
+        self.register_buffer("mask", causal_mask(context_length), persistent=False)
+
+    def forward(self, x: Tensor, return_weights: bool = False) -> Tensor | tuple[Tensor, Tensor]:
+        T = x.shape[-2]
+        q, k, v = self.W_q(x), self.W_k(x), self.W_v(x)
+
+        # Scaling by sqrt(d) is not cosmetic. Dot products of random vectors have variance
+        # proportional to d, and large values saturate softmax -- where its gradient vanishes and
+        # attention stops learning entirely.
+        scores = q @ k.transpose(-2, -1) / math.sqrt(self.d_out)
+
+        # -inf *before* softmax, so exp() gives exactly 0 and the surviving weights renormalize
+        # to sum to 1. Zeroing after softmax leaves rows summing to less than 1, which silently
+        # shrinks the output toward zero.
+        scores = scores.masked_fill(self.mask[:T, :T], float("-inf"))
+
+        weights = self.dropout(torch.softmax(scores, dim=-1))
+        context = weights @ v
+        return (context, weights) if return_weights else context
+
+
+class MultiHeadWrapper(nn.Module):
+    """Stage 5, the naive version: a loop over independent heads, concatenated.
+
+    Correct, and slow -- it runs h separate small matmuls where one batched matmul would do.
+    Kept as the reference that `CausalSelfAttention` is tested against.
+    """
+
+    def __init__(
+        self,
+        d_in: int,
+        d_out: int,
+        context_length: int,
+        n_heads: int,
+        dropout: float = 0.0,
+        qkv_bias: bool = False,
+    ) -> None:
+        super().__init__()
+        if d_out % n_heads:
+            raise ValueError(f"d_out={d_out} must divide evenly into n_heads={n_heads}")
+        self.heads = nn.ModuleList(
+            SingleHeadAttention(d_in, d_out // n_heads, context_length, dropout, qkv_bias)
+            for _ in range(n_heads)
+        )
+        self.W_o = nn.Linear(d_out, d_out)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.W_o(torch.cat([head(x) for head in self.heads], dim=-1))
+
+
+# --- the real one -----------------------------------------------------------------------------
+
+
+class CausalSelfAttention(nn.Module):
+    """Batched multi-head (or grouped-query) causal attention.
+
+    All heads in one matmul. The whole trick is two reshapes: split the feature dimension into
+    (heads, head_dim), then move heads next to the batch dimension so `@` treats them as extra
+    batch dims.
+
+    With `n_kv_heads < n_heads` this is grouped-query attention: fewer key/value heads, each
+    shared across a group of query heads, which shrinks the KV cache by the group size. See
+    notes/02_attention.md section 5.
+    """
+
+    def __init__(self, cfg: ModelConfig) -> None:
+        super().__init__()
+        self.cfg = cfg
+        self.n_heads = cfg.n_heads
+        self.kv_heads = cfg.kv_heads
+        self.head_dim = cfg.head_dim
+        self.n_rep = cfg.n_rep
+        self.dropout = cfg.dropout
+
+        # One fused projection for q, k and v. Under GQA the k and v halves are narrower, so the
+        # output is (n_heads + 2 * kv_heads) * head_dim rather than 3 * emb_dim.
+        self.q_dim = cfg.n_heads * cfg.head_dim
+        self.kv_dim = cfg.kv_heads * cfg.head_dim
+        self.W_qkv = nn.Linear(cfg.emb_dim, self.q_dim + 2 * self.kv_dim, bias=cfg.qkv_bias)
+
+        # Without this the heads sit in disjoint slices, unable to influence each other. W_o
+        # mixes them back into a single representation.
+        self.W_o = nn.Linear(cfg.emb_dim, cfg.emb_dim)
+
+        self.attn_dropout = nn.Dropout(cfg.dropout)
+        self.register_buffer("mask", causal_mask(cfg.context_length), persistent=False)
+
+    def _project(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        B, T, _ = x.shape
+        q, k, v = self.W_qkv(x).split([self.q_dim, self.kv_dim, self.kv_dim], dim=-1)
+        # (B, T, d) -> (B, T, H, hd) -> (B, H, T, hd)
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.kv_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.kv_heads, self.head_dim).transpose(1, 2)
+        return q, k, v
+
+    def _expand_kv(self, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
+        """Share each key/value head across its group of query heads (GQA). A no-op for MHA."""
+        if self.n_rep == 1:
+            return k, v
+        return (
+            k.repeat_interleave(self.n_rep, dim=1),
+            v.repeat_interleave(self.n_rep, dim=1),
+        )
+
+    def forward(self, x: Tensor, rope=None, cache=None) -> Tensor:
+        """`rope` and `cache` are unused in v1 -- notes 6 and 7 fill them in."""
+        B, T, _ = x.shape
+        q, k, v = self._project(x)
+        k, v = self._expand_kv(k, v)
+
+        if self.cfg.attn == "sdpa":
+            # Same mathematics as the manual path, but dispatches to FlashAttention: the
+            # (B, H, T, T) score tensor is never materialized.
+            ctx = F.scaled_dot_product_attention(
+                q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+            )
+        else:
+            scores = q @ k.transpose(-2, -1) / math.sqrt(self.head_dim)
+            scores = scores.masked_fill(self.mask[:T, :T], float("-inf"))
+            ctx = self.attn_dropout(torch.softmax(scores, dim=-1)) @ v
+
+        # (B, H, T, hd) -> (B, T, H, hd) -> (B, T, d).
+        # contiguous() is required because transpose only changes how the tensor is read, not
+        # how it is laid out, and view needs a contiguous layout.
+        ctx = ctx.transpose(1, 2).contiguous().view(B, T, -1)
+        return self.W_o(ctx)
+
+    @torch.no_grad()
+    def attention_weights(self, x: Tensor) -> Tensor:
+        """The (B, H, T, T) weight matrix, for inspection. Always takes the manual path."""
+        T = x.shape[1]
+        q, k, _ = self._project(x)
+        k, _ = self._expand_kv(k, k)
+        scores = q @ k.transpose(-2, -1) / math.sqrt(self.head_dim)
+        return torch.softmax(scores.masked_fill(self.mask[:T, :T], float("-inf")), dim=-1)
+
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+    cfg = SMALL
+    x = torch.randn(2, 16, cfg.emb_dim)
+
+    attn = CausalSelfAttention(cfg)
+    print(f"{'input':<28} {tuple(x.shape)}")
+    q, k, v = attn._project(x)
+    print(f"{'q after head split':<28} {tuple(q.shape)}   (B, H, T, hd)")
+    print(f"{'k after head split':<28} {tuple(k.shape)}")
+    print(f"{'output':<28} {tuple(attn(x).shape)}")
+
+    w = attn.attention_weights(x)
+    print(f"\n{'attention weights':<28} {tuple(w.shape)}   <- quadratic in T")
+    print(f"{'rows sum to':<28} {w.sum(-1).mean().item():.6f}")
+    print(f"{'weight above diagonal':<28} {w.triu(1).abs().max().item():.1e}  (must be 0)")
+
+    from dataclasses import replace
+
+    gqa = CausalSelfAttention(replace(cfg, n_kv_heads=2))
+    print(f"\nMHA qkv projection: {tuple(attn.W_qkv.weight.shape)}")
+    print(f"GQA qkv projection: {tuple(gqa.W_qkv.weight.shape)}   <- narrower k and v")

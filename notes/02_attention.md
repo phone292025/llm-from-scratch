@@ -3,7 +3,10 @@
 The hard one, and the only genuinely new idea in the architecture. Everything else is standard
 neural network engineering. Go slowly here; the rest is easy afterwards.
 
-**Produces:** `src/llm/attention.py`, `tests/test_02_attention.py`
+**Produces:** `src/llm/config.py`, `src/llm/attention.py`, `tests/test_02_attention.py`
+
+`config.py` was pulled forward from note 4: `CausalSelfAttention` needs it, and it is pure
+data with no imports, so it costs nothing to define early.
 
 ---
 

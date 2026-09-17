@@ -3,8 +3,8 @@
 Assembling the pieces into something that runs. Short note — the hard ideas are behind us, and this
 is mostly wiring. It ends with the single most convincing test in the project.
 
-**Produces:** `src/llm/config.py`, `src/llm/model.py`, `src/llm/gpt2_weights.py`,
-`tests/test_04_model.py`
+**Produces:** `src/llm/model.py`, `src/llm/gpt2_weights.py`, `tests/test_04_model.py`
+(`config.py` was built early, in note 2)
 
 ---
 
@@ -79,7 +79,7 @@ train — see [ARCHITECTURE §6](../docs/ARCHITECTURE.md) for why chasing 124 M 
 
 Three things to verify the moment the model first runs, in this order:
 
-**Parameter count is exactly 163,009,536** untied, 124,412,160 tied. This number is unforgiving —
+**Parameter count is exactly 163,037,184** untied, 124,439,808 tied. This number is unforgiving —
 a missing bias, a dropped layer, or a wrong hidden dimension all change it. Matching it exactly is
 strong evidence the architecture is right.
 
@@ -159,8 +159,8 @@ loop short and avoids duplicating the flattening logic.
 | Test | Catches |
 |---|---|
 | logits shape `(B, T, V)` | wiring |
-| **parameter count is exactly 163,009,536 untied** | any structural mistake at all |
-| tied count is 124,412,160, and the two weights share storage | tying implemented as a copy instead of a reference |
+| **parameter count is exactly 163,037,184 untied** | any structural mistake at all |
+| tied count is 124,439,808, and the two weights share storage | tying implemented as a copy instead of a reference |
 | loss at init is 10.82 ± 0.5 | initialization scale, mask leaks |
 | forward is deterministic in eval mode | dropout left active |
 | every `SMALL` config variant builds and runs | that the config switches are wired |
