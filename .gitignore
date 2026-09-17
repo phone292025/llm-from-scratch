@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+data/
+checkpoints/
+runs/
+*.pdf
+*.bin
+*.pth
+*.safetensors
+.pytest_cache/

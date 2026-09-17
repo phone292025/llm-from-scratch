@@ -1,0 +1,93 @@
+# Build an LLM from scratch
+
+A GPT trained from nothing, written layer by layer, by me, with no `transformers` library.
+
+Every tensor operation in the model is code in this repo. The only things imported are PyTorch
+(matrix math + autograd) and `tiktoken` (the tokenizer, ch. 1 explains why I don't hand-roll that).
+
+---
+
+## Where I am
+
+Read the notes **in order**. Each one is a lesson; each one ends with the exact files it produces.
+Nothing gets coded until its note is read.
+
+| # | Note | Builds | Status |
+|---|------|--------|--------|
+| 0 | [The mental model](notes/00_overview.md) | — (read first) | [x] written |
+| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `dataset.py` | [x] **built, 25 tests pass** |
+| 2 | [Attention](notes/02_attention.md) | `attention.py` | [ ] |
+| 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [ ] |
+| 4 | [The whole model](notes/04_the_model.md) | `config.py` `model.py` | [ ] |
+| 5 | [Training](notes/05_training.md) | `train.py` `optim.py` | [ ] |
+| 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [ ] |
+| 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [ ] |
+
+Design document: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the shapes, the module map,
+the config system, and the reasoning behind each choice.
+Roadmap: **[docs/ROADMAP.md](docs/ROADMAP.md)** — what v1, v2 and v3 mean.
+Training data: **[docs/DATA_GUIDE.md](docs/DATA_GUIDE.md)** — what to hand over and in what shape.
+
+---
+
+## Setup
+
+My GPU is an **RTX 5070 Laptop**. That chip is Blackwell (compute capability sm_120), and the
+default PyTorch wheels **do not contain kernels for it** — they fail at the first CUDA call with
+`no kernel image is available for execution on the device`. The CUDA 12.8 index is required:
+
+```bash
+python -m venv .venv
+```
+```bash
+.venv/Scripts/pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+```bash
+.venv/Scripts/pip install tiktoken numpy matplotlib pytest safetensors huggingface_hub
+```
+
+Verify the GPU before writing any model code. If this prints a number, everything downstream works:
+
+```bash
+.venv/Scripts/python -c "import torch;a=torch.randn(8,8,device='cuda');print(torch.__version__,(a@a).sum().item())"
+```
+
+---
+
+## Layout
+
+```
+src/llm/
+  config.py      one dataclass that describes any model I can build
+  tokenizer.py   text <-> token ids
+  dataset.py     sliding-window batches
+  attention.py   causal self-attention, MHA and GQA
+  norms.py       LayerNorm, RMSNorm
+  ffn.py         GELU MLP, SwiGLU MLP
+  rope.py        rotary position embeddings
+  block.py       one transformer block
+  model.py       the stack: embeddings -> blocks -> logits
+  generate.py    sampling loop (greedy, temperature, top-k, top-p)
+  kv_cache.py    fast incremental decoding
+  optim.py       AdamW + warmup/cosine schedule + grad clipping
+  train.py       the training loop
+  checkpoint.py  save/load/resume
+  gpt2_weights.py  load real OpenAI GPT-2 weights into my model (correctness proof)
+tests/           one test file per note
+scripts/         runnable demos that print shapes
+data/            training corpus (gitignored)
+checkpoints/     weights (gitignored)
+```
+
+Every module in `src/llm/` is importable **and** runnable on its own (`python -m llm.attention`)
+so any single layer can be poked at in isolation.
+
+---
+
+## The two moments that prove it works
+
+1. **Load real GPT-2 weights into my own code** and watch it write fluent English. If my
+   attention, my LayerNorm and my block wiring were wrong by even a transpose, this produces
+   garbage. It is a free, exact correctness oracle — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+2. **Train from random init** and watch loss fall from 10.82 (= `ln 50257`, pure ignorance) toward
+   something low, while the sampled text drifts from noise into sentences.

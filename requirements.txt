@@ -1,0 +1,9 @@
+# torch must come from the CUDA 12.8 index - this machine is Blackwell sm_120:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+torch>=2.7
+tiktoken>=0.7
+numpy>=1.26
+matplotlib>=3.8
+pytest>=8.0
+safetensors>=0.4
+huggingface_hub>=0.23
