@@ -122,8 +122,20 @@ Three named presets:
 | Preset | Params | Settings | Purpose |
 |---|---|---|---|
 | `GPT2_124M` | 124 M | exactly the 2019 architecture | **loads real OpenAI weights** — the correctness oracle |
-| `SMALL` | ~30 M | d=384, 6 layers, 6 heads, T=512 | what actually trains well in 8 GB |
-| `MODERN` | ~30 M | SMALL + rmsnorm + rope + swiglu + GQA(2) | the v2 architecture |
+| `SMALL` | 38 M | d=512, 4 layers, 16 heads, T=256, no bias | what we train |
+| `TINYSTORIES` | 18 M | SMALL with a 10k vocabulary | a corpus-sized vocabulary — see below |
+| `MODERN` | 37 M | SMALL + rmsnorm + rope + swiglu + GQA(4) | the v2 architecture |
+
+`SMALL`'s shape is not arbitrary. Its **aspect ratio** — `emb_dim / n_layers` — is 128, inside the
+100–200 band that essentially every production model occupies (BLOOM 205, PaLM 156, GPT-3 128,
+Llama 102). An earlier version of this file used d=384 over 6 layers, a ratio of 64, which is too
+deep and narrow; see [CS336_FINDINGS.md](CS336_FINDINGS.md).
+
+**Vocabulary size dominates a model this small.** At `d=512`, GPT-2's 50,257-token vocabulary is a
+25.7 M-parameter embedding table — 67% of `SMALL`, and most of those rows go unused on a simple
+corpus. A 10,000-token vocabulary trained on the corpus itself cuts that to 5.1 M and moves the
+capacity into the layers. That is what `TINYSTORIES` is, and it needs a tokenizer trained on the
+data rather than GPT-2's.
 
 Because `SMALL` and `MODERN` differ only by flags, they can be trained on identical data and their
 loss curves drawn on one chart. **That A/B is the most educational thing in this project**, and a

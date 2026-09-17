@@ -161,7 +161,7 @@ def test_gqa_with_full_kv_heads_is_plain_mha(cfg: ModelConfig, x: torch.Tensor) 
         assert torch.equal(explicit(x), implicit(x))
 
 
-@pytest.mark.parametrize("n_kv_heads", [1, 2, 3, 6])
+@pytest.mark.parametrize("n_kv_heads", [1, 2, 4, 8, 16])
 def test_gqa_runs_and_shrinks_the_kv_projection(cfg: ModelConfig, x: torch.Tensor, n_kv_heads: int) -> None:
     attn = CausalSelfAttention(replace(cfg, n_kv_heads=n_kv_heads))
     assert attn(x).shape == x.shape
@@ -170,14 +170,15 @@ def test_gqa_runs_and_shrinks_the_kv_projection(cfg: ModelConfig, x: torch.Tenso
 
 
 def test_gqa_shares_kv_heads_across_groups(cfg: ModelConfig, x: torch.Tensor) -> None:
-    attn = CausalSelfAttention(replace(cfg, n_kv_heads=2))
+    attn = CausalSelfAttention(replace(cfg, n_kv_heads=cfg.n_heads // 4))
     _, k, _ = attn._project(x)
     k_expanded, _ = attn._expand_kv(k, k)
     assert k_expanded.shape[1] == cfg.n_heads
-    # Heads within a group must be identical copies.
-    assert torch.equal(k_expanded[:, 0], k_expanded[:, 1])
-    assert torch.equal(k_expanded[:, 0], k_expanded[:, 2])
-    assert not torch.equal(k_expanded[:, 0], k_expanded[:, 3])
+    # Each key/value head is copied across exactly n_rep query heads, and the next group differs.
+    n_rep = 4
+    for h in range(1, n_rep):
+        assert torch.equal(k_expanded[:, 0], k_expanded[:, h])
+    assert not torch.equal(k_expanded[:, 0], k_expanded[:, n_rep])
 
 
 def test_rejects_heads_that_do_not_divide_the_embedding(cfg: ModelConfig) -> None:
@@ -187,7 +188,7 @@ def test_rejects_heads_that_do_not_divide_the_embedding(cfg: ModelConfig) -> Non
 
 def test_rejects_kv_heads_that_do_not_group_evenly(cfg: ModelConfig) -> None:
     with pytest.raises(ValueError, match="multiple of"):
-        replace(cfg, n_heads=6, n_kv_heads=4)
+        replace(cfg, n_heads=16, n_kv_heads=5)
 
 
 # --- the scaling is not cosmetic ---------------------------------------------------------------

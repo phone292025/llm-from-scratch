@@ -43,6 +43,18 @@ Note 7. Four upgrades, each a flag already present in `ModelConfig`:
 Plus **KV caching** in `kv_cache.py`, which makes generation O(1) per token instead of O(T) —
 the difference between a model that feels usable and one that does not.
 
+Then the stability tricks that have become standard since GPT-2. None are needed at our scale, but
+they are what the field now does, and the first is cheap:
+
+| Trick | What it is | Used by |
+|---|---|---|
+| **QK-norm** | RMSNorm on queries and keys before the attention softmax | Gemma 2/3, Qwen 3, OLMo 2/3, DCLM |
+| **Z-loss** | auxiliary penalty keeping the output softmax normalizer near 1 | PaLM, Baichuan 2, DCLM, OLMo 2/3 |
+| **Logit soft-capping** | `tanh`-bounding the logits | Gemma (may cost quality) |
+| **Interleaved SWA** | every 4th layer full attention, the rest a sliding window | Gemma 3/4, Llama 4, OLMo 3, Command A |
+
+Sourced from CS336 lecture 3 — see [CS336_FINDINGS.md](CS336_FINDINGS.md).
+
 **The method is what matters here.** Each change is trained on identical data with an identical
 seed against the `SMALL` baseline, and the loss curves go on one chart. This converts "modern
 models use RMSNorm" from something read into something measured. Any change that does not help

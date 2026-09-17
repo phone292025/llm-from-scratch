@@ -37,8 +37,25 @@ The honest numbers. Tokens, not megabytes: English averages **about 4 characters
 | 1 GB | 250 M | genuinely readable short passages from a ~30 M model |
 | 2.5 GB | 600 M | the Chinchilla-optimal amount for a 30 M model — the target |
 
-The rule of thumb is **about 20 tokens per parameter**. Under that, the model is undertrained and
-extra parameters are wasted; well over it, more data still helps but with diminishing returns.
+The rule of thumb is **about 20 tokens per parameter** — but that number needs a caveat, because
+it is routinely quoted without one.
+
+20 is Chinchilla's *compute-optimal* ratio: the best model you can get for a fixed **training**
+budget. It is not the best model you can get *full stop*. If you intend to actually use the model,
+most of your compute goes on inference, so a smaller model trained for longer is cheaper to run at
+the same quality. Real models have drifted far past 20:
+
+| Model | tokens/param |
+|---|---|
+| GPT-3 | 2 |
+| Chinchilla | 20 |
+| Llama 2 70B | 29 |
+| Mistral 7B | 110 |
+| Llama 3 70B | 215 |
+
+For us this is good news. Our models are small, so extra training passes are cheap, and there is
+no reason to stop at 20 tokens per parameter. Under it the model is genuinely undertrained and the
+extra parameters are wasted; well over it, gains continue with diminishing returns.
 
 If you have less than ~10 MB, that is fine — we just build a smaller model to match. The failure
 mode to avoid is a large model on a small corpus: it memorizes instead of generalizing, validation

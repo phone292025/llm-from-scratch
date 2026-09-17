@@ -71,15 +71,19 @@ class ModelConfig:
 
         GELU uses two matrices, so the classic 4x. SwiGLU uses three, so the width shrinks to
         8/3x to keep the parameter count equal -- otherwise a SwiGLU model is simply bigger and
-        any comparison against the GELU baseline is meaningless. Rounded to a multiple of 256 for
-        hardware alignment.
+        any comparison against the GELU baseline is meaningless.
+
+        Rounded to the *nearest* multiple of 64, not up. 64 is the alignment that matters for
+        tensor cores, and rounding up to a coarser boundary overshoots badly at small widths:
+        at emb_dim=512 the target is 1365, which rounds up to 1536 (12% too many parameters)
+        but to the nearest 64 gives 1344 -- the value CS336 uses for exactly this model size.
         """
         if self.ffn_hidden is not None:
             return self.ffn_hidden
         if self.act == "gelu":
             return 4 * self.emb_dim
-        target = int(8 * self.emb_dim / 3)
-        return ((target + 255) // 256) * 256
+        target = 8 * self.emb_dim / 3
+        return max(64, round(target / 64) * 64)
 
     def n_params(self, tied: bool | None = None) -> int:
         """Predicted parameter count, for comparison against the real one.
@@ -110,24 +114,44 @@ class ModelConfig:
 #: The 2019 architecture, exactly. Loads real OpenAI weights - the correctness oracle.
 GPT2_124M = ModelConfig()
 
-#: ~30M parameters. What actually trains well in 8GB - see docs/ARCHITECTURE.md section 6.
-SMALL = ModelConfig(emb_dim=384, n_layers=6, n_heads=6, context_length=512)
-
-#: v2: the same size as SMALL, with the modern components. See notes/07_modern_upgrades.md.
-MODERN = replace(
-    SMALL, norm="rmsnorm", pos="rope", act="swiglu", n_kv_heads=2, qkv_bias=False
+#: What we actually train. Shape follows CS336 lecture 3 and their validated TinyStories run:
+#: aspect ratio emb_dim/n_layers = 128, inside the 100-200 band that nearly every production
+#: model sits in (BLOOM 205, PaLM 156, GPT-3 128, Llama 102). Bias terms off, as modern models
+#: do everywhere rather than only on QKV.
+SMALL = ModelConfig(
+    emb_dim=512, n_layers=4, n_heads=16, context_length=256, qkv_bias=False
 )
 
-PRESETS: dict[str, ModelConfig] = {"gpt2": GPT2_124M, "small": SMALL, "modern": MODERN}
+#: SMALL with a vocabulary sized for a simple corpus.
+#: At vocab 50257 the embedding table is 60% of a model this small, and most of those rows are
+#: never used by children's-story text. A 10k vocabulary trained on the corpus itself cuts the
+#: table from 25.7M to 5.1M parameters and moves that capacity into the layers. Requires a
+#: tokenizer trained on the corpus - see docs/CS336_FINDINGS.md.
+TINYSTORIES = replace(SMALL, vocab_size=10_000)
+
+#: v2: the same shape as SMALL, with the modern components. See notes/07_modern_upgrades.md.
+MODERN = replace(SMALL, norm="rmsnorm", pos="rope", act="swiglu", n_kv_heads=4)
+
+PRESETS: dict[str, ModelConfig] = {
+    "gpt2": GPT2_124M,
+    "small": SMALL,
+    "tinystories": TINYSTORIES,
+    "modern": MODERN,
+}
 
 
 if __name__ == "__main__":
-    print(f"{'preset':<8} {'params':>12} {'d':>5} {'L':>3} {'H':>3} {'kv':>3} {'ffn':>6}  flags")
+    header = f"{'preset':<12} {'params':>12} {'non-emb':>11} {'emb %':>6} {'d':>5} {'L':>3} {'H':>3} {'kv':>3} {'ffn':>5} {'d/L':>5}"
+    print(header)
+    print("-" * len(header))
     for name, cfg in PRESETS.items():
-        flags = f"{cfg.norm}/{cfg.pos}/{cfg.act}"
+        emb = cfg.vocab_size * cfg.emb_dim
+        total = cfg.n_params()
         print(
-            f"{name:<8} {cfg.n_params():>12,} {cfg.emb_dim:>5} {cfg.n_layers:>3} "
-            f"{cfg.n_heads:>3} {cfg.kv_heads:>3} {cfg.ffn_hidden_dim:>6}  {flags}"
+            f"{name:<12} {total:>12,} {total - emb:>11,} {emb / total:>6.0%} "
+            f"{cfg.emb_dim:>5} {cfg.n_layers:>3} {cfg.n_heads:>3} {cfg.kv_heads:>3} "
+            f"{cfg.ffn_hidden_dim:>5} {cfg.emb_dim / cfg.n_layers:>5.0f}"
         )
-    print(f"\ngpt2 untied: {GPT2_124M.n_params(tied=False):,}  (should be 163,009,536)")
-    print(f"gpt2 tied:   {GPT2_124M.n_params(tied=True):,}  (should be 124,412,160)")
+    print("\nd/L is the aspect ratio. CS336 lecture 3: production models cluster in 100-200.")
+    print(f"\ngpt2 untied: {GPT2_124M.n_params(tied=False):,}  (expect 163,037,184)")
+    print(f"gpt2 tied:   {GPT2_124M.n_params(tied=True):,}  (expect 124,439,808)")

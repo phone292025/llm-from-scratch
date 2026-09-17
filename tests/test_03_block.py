@@ -19,7 +19,8 @@ from llm.config import SMALL, ModelConfig
 from llm.ffn import GELU, GELUFeedForward, SwiGLUFeedForward, make_ffn
 from llm.norms import LayerNorm, RMSNorm, make_norm
 
-B, T, D = 2, 8, 384
+B, T = 2, 8
+D = SMALL.emb_dim  # derived, so preset changes do not silently break these tests
 
 
 @pytest.fixture
@@ -134,16 +135,22 @@ def test_gelu_expands_to_four_times(cfg: ModelConfig) -> None:
 
 
 def test_swiglu_hidden_width_keeps_parameter_count_fair(cfg: ModelConfig) -> None:
-    """Three matrices instead of two, so the width must shrink or the comparison is rigged."""
+    """Three matrices instead of two, so the width must shrink or the comparison is rigged.
+
+    Exact parity is not reachable once the width is snapped to a multiple of 64, and real models
+    do not chase it either -- CS336 lecture 3 reports d_ff/d_model between 2.67 and 4.0 across
+    Llama, Mistral, Qwen and DeepSeek. A few percent is fine; 12% is not.
+    """
     gelu = sum(p.numel() for p in GELUFeedForward(cfg).parameters())
     swiglu = sum(
         p.numel() for p in SwiGLUFeedForward(replace(cfg, act="swiglu")).parameters()
     )
-    assert abs(gelu - swiglu) / gelu < 0.01
+    assert abs(gelu - swiglu) / gelu < 0.03
 
 
-def test_swiglu_hidden_is_a_multiple_of_256(cfg: ModelConfig) -> None:
-    assert replace(cfg, act="swiglu").ffn_hidden_dim % 256 == 0
+def test_swiglu_hidden_is_a_multiple_of_64(cfg: ModelConfig) -> None:
+    # 64 is the alignment that matters for tensor cores.
+    assert replace(cfg, act="swiglu").ffn_hidden_dim % 64 == 0
 
 
 def test_swiglu_gate_actually_gates(cfg: ModelConfig, x: torch.Tensor) -> None:

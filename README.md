@@ -27,6 +27,8 @@ Design document: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the shapes
 the config system, and the reasoning behind each choice.
 Roadmap: **[docs/ROADMAP.md](docs/ROADMAP.md)** — what v1, v2 and v3 mean.
 Training data: **[docs/DATA_GUIDE.md](docs/DATA_GUIDE.md)** — what to hand over and in what shape.
+Cross-check: **[docs/CS336_FINDINGS.md](docs/CS336_FINDINGS.md)** — what Stanford's CS336 course
+changed about this design, including three errors it caught.
 
 ---
 
@@ -90,4 +92,6 @@ so any single layer can be poked at in isolation.
    attention, my LayerNorm and my block wiring were wrong by even a transpose, this produces
    garbage. It is a free, exact correctness oracle — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 2. **Train from random init** and watch loss fall from 10.82 (= `ln 50257`, pure ignorance) toward
-   something low, while the sampled text drifts from noise into sentences.
+   something low, while the sampled text drifts from noise into sentences. The target is not vague:
+   on the `TINYSTORIES` config at 41 M tokens, CS336 reports a validation loss of **1.80**
+   (perplexity ~6). Missing it by a lot means the implementation is wrong, not merely small.

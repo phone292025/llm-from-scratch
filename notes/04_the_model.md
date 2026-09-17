@@ -64,13 +64,17 @@ deep the model is. It is one loop over named parameters and it visibly improves 
 `ModelConfig` is described in [ARCHITECTURE §3](../docs/ARCHITECTURE.md). Three presets:
 
 ```python
-GPT2_124M = ModelConfig()                                  # the 2019 architecture exactly
-SMALL     = ModelConfig(emb_dim=384, n_layers=6, n_heads=6,
-                        context_length=512)                # ~30M, trains well in 8GB
-MODERN    = replace(SMALL, norm="rmsnorm", pos="rope",
-                    act="swiglu", n_kv_heads=2,
-                    qkv_bias=False)                        # v2
+GPT2_124M   = ModelConfig()                                  # the 2019 architecture exactly
+SMALL       = ModelConfig(emb_dim=512, n_layers=4, n_heads=16,
+                          context_length=256, qkv_bias=False)  # what we train
+TINYSTORIES = replace(SMALL, vocab_size=10_000)              # corpus-sized vocabulary
+MODERN      = replace(SMALL, norm="rmsnorm", pos="rope",
+                      act="swiglu", n_kv_heads=4)            # v2
 ```
+
+`SMALL`'s aspect ratio (`emb_dim / n_layers` = 128) sits in the 100–200 band every production
+model occupies, and bias terms are off as modern models do. See
+[CS336_FINDINGS.md](../docs/CS336_FINDINGS.md).
 
 `GPT2_124M` is for loading pretrained weights and doing inference. `SMALL` is what we actually
 train — see [ARCHITECTURE §6](../docs/ARCHITECTURE.md) for why chasing 124 M on a laptop is a trap.
