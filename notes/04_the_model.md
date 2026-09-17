@@ -91,6 +91,14 @@ strong evidence the architecture is right.
 tokens, giving `ln(50257) = 10.8247`. If it starts much lower, something is leaking information
 (check the mask). Much higher, and initialization is wrong.
 
+One catch worth knowing, because it looks like a bug. That expectation only holds when the targets
+are **independent of the inputs**. With weight tying, the residual stream carries the token
+embedding forward into a head that *is* the token embedding, so an untrained model already leans
+toward predicting the *current* token: measured, it puts 0.00006 probability on the input token
+against a uniform 0.00002 — three times the mass, before any training at all. Score a tied model
+against `targets == inputs` and the loss comes out near 9.8 rather than 10.82. Real training data
+sits somewhere between, since language genuinely does repeat.
+
 **Generation produces gibberish.** Run the untrained model. The output is noise — and that is
 correct. The architecture is complete; the knowledge is not. Seeing this before training makes the
 contrast afterwards much more legible.
@@ -129,9 +137,30 @@ h.{i}.mlp.c_proj.weight  -> blocks[i].ffn.down.weight       (transposed)
 ln_f.{weight,bias}       -> final_norm.{scale,shift}
 ```
 
-After loading, `"The capital of France is"` should continue with `" Paris"`. When it does, the
-architecture is verified and training can start with confidence that failures are about data and
-hyperparameters, not about a silently wrong transpose.
+### What it actually produces
+
+Measured, rather than hoped for:
+
+```
+'The capital of France is'  -> ' the capital of the French Republic, and the capital of the'
+'Every effort moves you'    -> ' forward.\n\nThe first step is to understand the importance'
+```
+
+Fluent English out of code we wrote. Note the repetition — that is greedy decoding, not a defect
+in the weights, and note 6 fixes it.
+
+Two sharper checks than reading the output:
+
+- **`" Paris"` ranks 5th** for `"The capital of France is"` (p = 0.032) and **2nd** for
+  `"...is the city of"` (p = 0.111). A single wrong transpose puts it nowhere near the top.
+  It is not the argmax — GPT-2 124M is small, and the naive expectation that it would be is
+  simply wrong.
+- **Loss on ordinary English is 3.88** (perplexity 48), against **10.95** (perplexity 57,000) for
+  the same architecture at random init. That is the quantitative version of "it works", and it is
+  what the test asserts.
+
+When those hold, the architecture is verified, and any later failure is about data or
+hyperparameters rather than a silently wrong transpose.
 
 ## 7. What gets built
 
@@ -168,7 +197,7 @@ loop short and avoids duplicating the flattening logic.
 | loss at init is 10.82 ± 0.5 | initialization scale, mask leaks |
 | forward is deterministic in eval mode | dropout left active |
 | every `SMALL` config variant builds and runs | that the config switches are wired |
-| **GPT-2 weights load and produce " Paris"** | the transposes, and the entire architecture end to end |
+| **GPT-2 ranks " Paris" top-5, and scores 3.88 on English** | the transposes, and the entire architecture end to end |
 | a save → load → forward round trip gives identical logits | checkpoint code |
 
 ## Demo
