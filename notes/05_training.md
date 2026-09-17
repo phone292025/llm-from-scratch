@@ -78,9 +78,14 @@ betas = (0.9, 0.95)      # 0.95 not 0.999 - transformers prefer a shorter varian
 weight_decay = 0.1       # on matrices only
 ```
 
-**Weight decay applies to weight matrices, not to biases, norm parameters, or embeddings.** Decaying
-a LayerNorm scale toward zero is actively harmful. This is two parameter groups and one list
-comprehension, and it is skipped surprisingly often.
+**Weight decay applies to weight matrices, not to biases or norm parameters.** Decaying a
+LayerNorm scale toward zero is actively harmful — it fights the normalization the layer exists to
+perform. Two parameter groups and one list comprehension, and it is skipped surprisingly often.
+
+The split is on dimensionality: 2D and up gets decay, 1D does not. That *includes* embeddings,
+which an earlier draft of this note excluded. With weight tying the embedding table is also the
+output projection, so it behaves like a matrix, and decaying it is what nanoGPT and most current
+implementations do.
 
 ### Learning rate schedule
 
@@ -158,8 +163,21 @@ committing to it.
 
 ## 6. The first run is not the real run
 
-**Run A — correctness, two minutes.** A tiny corpus, a small model, deliberately overfitting until
-loss approaches zero and the model reproduces the text verbatim. This is not a good model; it is a
+**Run A — correctness, twenty seconds.** A tiny corpus, a small model, deliberately overfitting
+until loss approaches zero and the model reproduces the text verbatim.
+
+Measured, on `the-verdict.txt` (4,630 train / 515 validation tokens) with `SMALL` at 38 M
+parameters, 400 steps on a 5070:
+
+| | first | best | last |
+|---|---|---|---|
+| train | 10.93 | **0.003** | 0.004 |
+| validation | 10.86 | 6.20 (step 100) | 7.48 |
+
+20 seconds, 819,200 tokens, ~40,000 tokens/second. Validation bottomed out at step 100 and then
+climbed while training loss kept falling — the textbook overfitting shape, and here it is the
+goal. The samples go from `"Mostly Mostly standalone standalone..."` at step 0 to whole sentences
+lifted verbatim from the story. This is not a good model; it is a
 proof that the data pipeline, the model, the loss, the optimizer and the checkpointing all work end
 to end. **Overfitting on purpose is the fastest possible test that learning is happening at all.**
 If loss will not go to zero on twenty kilobytes of text, something is broken, and finding that out
