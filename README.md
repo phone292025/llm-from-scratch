@@ -29,6 +29,7 @@ Roadmap: **[docs/ROADMAP.md](docs/ROADMAP.md)** — what v1, v2 and v3 mean.
 Training data: **[docs/DATA_GUIDE.md](docs/DATA_GUIDE.md)** — what to hand over and in what shape.
 Cross-check: **[docs/CS336_FINDINGS.md](docs/CS336_FINDINGS.md)** — what Stanford's CS336 course
 changed about this design, including three errors it caught.
+Testing: **[docs/TESTING.md](docs/TESTING.md)** — how to run everything, and what passing proves.
 
 ---
 

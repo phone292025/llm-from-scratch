@@ -70,3 +70,47 @@ def load_config(path: str | Path) -> ModelConfig:
     if not ckpt.get("cfg"):
         raise ValueError(f"{path} has no config stored")
     return ModelConfig(**ckpt["cfg"])
+
+
+if __name__ == "__main__":
+    import tempfile
+    from dataclasses import replace
+
+    from llm.config import SMALL
+    from llm.model import GPTModel
+    from llm.optim import make_optimizer, make_schedule
+
+    cfg = replace(SMALL, n_layers=2, emb_dim=64, n_heads=4, vocab_size=512, context_length=32)
+    torch.manual_seed(0)
+    model = GPTModel(cfg)
+    opt = make_optimizer(model, lr=1e-3)
+    sched = make_schedule(opt, warmup_steps=2, total_steps=20)
+
+    x = torch.randint(0, cfg.vocab_size, (2, 32))
+    for _ in range(5):
+        opt.zero_grad(set_to_none=True)
+        _, loss = model(x, targets=x)
+        loss.backward()
+        opt.step()
+        sched.step()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = save(Path(tmp) / "demo.pt", model, opt, sched, step=5, cfg=cfg)
+        size = path.stat().st_size / 1024**2
+        print(f"saved {size:.1f} MB: weights + optimizer state + scheduler + config")
+
+        model2 = GPTModel(cfg)
+        opt2 = make_optimizer(model2, lr=1e-3)
+        sched2 = make_schedule(opt2, warmup_steps=2, total_steps=20)
+        step = load(path, model2, opt2, sched2)
+
+        model.eval(), model2.eval()
+        with torch.no_grad():
+            same = torch.equal(model(x), model2(x))
+        print(f"resumed at step {step}")
+        print(f"  logits identical:      {same}")
+        print(f"  learning rate restored: {sched2.get_last_lr() == sched.get_last_lr()}")
+        print(f"  config travels with it: {load_config(path) == cfg}")
+
+    print("\nOptimizer state is most of that file. Resuming without Adam's moment estimates")
+    print("causes a visible loss spike while they rebuild from nothing.")
