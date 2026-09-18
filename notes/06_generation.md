@@ -106,8 +106,28 @@ without cache:  step n processes n tokens   -> O(T^2) total
 with cache:     step n processes 1 token    -> O(T)   total
 ```
 
-At 500 tokens that is a 50–100× speedup, and it is the difference between generation that feels
-instant and generation you wait through. Every real inference system does this.
+Every real inference system does this. How much it buys depends heavily on the hardware and the
+length, and an earlier draft of this note overstated it as "50–100× at 500 tokens". Measured on
+CPU with `SMALL` (38 M) from an 8-token prompt:
+
+| new tokens | no cache | with cache | speedup |
+|---|---|---|---|
+| 16 | 0.15 s | 0.07 s | 2.2× |
+| 64 | 1.42 s | 0.33 s | 4.3× |
+| 160 | 6.04 s | 0.81 s | 7.5× |
+| 320 | 20.27 s | 1.55 s | 13.1× |
+| 480 | 43.32 s | 2.15 s | **20.2×** |
+
+Read down the columns rather than across: the uncached time grows **quadratically** and the cached
+time **linearly**. That is O(T²) against O(T), visible in wall-clock seconds, and it is the real
+lesson — the speedup is not a fixed number but a ratio that keeps widening with length.
+
+**On a GPU, at short lengths, the cache can be slower.** Measured with GPT-2 124M on the 5070,
+100 new tokens took 0.93 s cached against 0.78 s uncached. A GPU running a short sequence is bound
+by kernel-launch overhead, not arithmetic: processing 8 tokens or 108 costs nearly the same, so the
+uncached path's recomputation is close to free, while the cache pays its bookkeeping on every step
+plus a full-context allocation up front. The cache wins on a GPU once sequences are long enough for
+arithmetic to dominate again — which is exactly the regime real inference lives in.
 
 The cost is memory, and it is substantial:
 

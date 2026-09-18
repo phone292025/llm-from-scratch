@@ -113,9 +113,15 @@ class ModelConfig:
     act:  Literal["gelu", "swiglu"] = "gelu"
     attn: Literal["manual", "sdpa"] = "sdpa"
     qkv_bias:    bool  = True            # GPT-2 has it; modern models drop it
+    linear_bias: bool  = True            # W_o and the GELU MLP; both flags make a bias-free model
     tie_weights: bool  = True
     dropout:     float = 0.0
 ```
+
+`qkv_bias` on its own does **not** produce a bias-free model — it governs the QKV projection and
+nothing else, leaving a bias on the attention output projection and on both GELU MLP matrices.
+That is three tensors per block that a config claiming "no bias" would still be carrying, so the
+two flags are separate and `SMALL` sets both.
 
 Three named presets:
 
@@ -124,7 +130,12 @@ Three named presets:
 | `GPT2_124M` | 124 M | exactly the 2019 architecture | **loads real OpenAI weights** — the correctness oracle |
 | `SMALL` | 38 M | d=512, 4 layers, 16 heads, T=256, no bias | what we train |
 | `TINYSTORIES` | 18 M | SMALL with a 10k vocabulary | a corpus-sized vocabulary — see below |
-| `MODERN` | 37 M | SMALL + rmsnorm + rope + swiglu + GQA(4) | the v2 architecture |
+| `MODERN` | 37 M | SMALL + rmsnorm + rope + swiglu + GQA(4) | the v2 architecture — **note 7, not buildable yet** |
+
+`MODERN` is a declaration of intent, not a runnable config. `rope.py` does not exist until note 7,
+and a model built with `pos="rope"` before then is bit-identical to one with `pos="none"`: it has
+no idea what order its tokens arrived in, and it still trains, still logs a falling loss and still
+emits text. `GPTModel.__init__` raises `NotImplementedError` rather than hand back such a model.
 
 `SMALL`'s shape is not arbitrary. Its **aspect ratio** — `emb_dim / n_layers` — is 128, inside the
 100–200 band that essentially every production model occupies (BLOOM 205, PaLM 156, GPT-3 128,
@@ -158,7 +169,7 @@ config.py     (no imports - pure data)
     |
     +--> tokenizer.py ----> dataset.py
     |
-    +--> norms.py   ffn.py   rope.py
+    +--> norms.py   ffn.py   rope.py (note 7)
     |         \       |       /
     |          +--> attention.py
     |                   |
@@ -182,7 +193,7 @@ config.py     (no imports - pure data)
 | `dataset.py` | sliding window, train/val split | tokenization |
 | `norms.py` | LayerNorm, RMSNorm | where norms are placed (that is `block.py`) |
 | `ffn.py` | GELU MLP, SwiGLU MLP | residuals |
-| `rope.py` | rotary angle tables, `apply_rope` | attention math |
+| `rope.py` *(note 7)* | rotary angle tables, `apply_rope` | attention math |
 | `attention.py` | Q/K/V, causal mask, heads, GQA | the positional scheme (it asks `rope.py`) |
 | `block.py` | pre-norm ordering, the two residuals | what the sublayers are |
 | `model.py` | embeddings, block stack, head, weight tying | how to sample or train |

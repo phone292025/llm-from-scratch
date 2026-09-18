@@ -10,7 +10,7 @@ Every command here was run and passes. Paths assume you are in `C:\Users\phone\D
 .venv/Scripts/python -m pytest tests/ -q
 ```
 
-127 tests, about 30 seconds. If this is green, the implementation is correct as far as anything
+193 tests, about 40 seconds. If this is green, the implementation is correct as far as anything
 can tell you without training a model.
 
 Per note, when you want to know *which* part broke:
@@ -23,12 +23,12 @@ Per note, when you want to know *which* part broke:
 
 ---
 
-## The three tests that actually matter
+## The tests that actually matter
 
-Most of the 127 are shape checks. These four are the ones that would catch a real disaster:
+Most of the 193 are shape checks. These six are the ones that would catch a real disaster:
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -k "causality or manual_matches_sdpa or layernorm_matches_pytorch or repeated_batch" -v
+.venv/Scripts/python -m pytest tests/ -k "causality or manual_matches_sdpa or layernorm_matches_pytorch or repeated_batch or identical_to_uncached or rope_config_is_refused" -v
 ```
 
 | Test | What it would catch |
@@ -37,6 +37,16 @@ Most of the 127 are shape checks. These four are the ones that would catch a rea
 | `manual_matches_sdpa` | our attention against PyTorch's own — proof, not plausibility |
 | `layernorm_matches_pytorch` | a normalization that is subtly wrong. Still trains; corrupts GPT-2 weight loading |
 | `loss_decreases_on_a_repeated_batch` | "can it learn at all" — if this fails nothing else matters |
+| `cached_generation_is_identical_to_uncached` | a KV cache that changes which keys a query sees. The output stays fluent and is quietly not what the model would have said |
+| `rope_config_is_refused_rather_than_silently_ignored` | an unimplemented positional scheme building a model that has no idea what order its tokens came in, and training happily anyway |
+
+### The failure mode these are aimed at
+
+Everything in this repo that can go wrong falls into two classes. The first announces itself: a
+shape mismatch, a loss that will not move, GPT-2 weights producing noise. The second does not —
+it trains, the loss falls, the samples read like English, and the model is simply worse than it
+should be for reasons no log line shows. The tests above are the ones aimed at the second class,
+which is why they are worth more than their count suggests.
 
 ---
 

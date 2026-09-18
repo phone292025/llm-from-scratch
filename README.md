@@ -15,13 +15,13 @@ Nothing gets coded until its note is read.
 | # | Note | Builds | Status |
 |---|------|--------|--------|
 | 0 | [The mental model](notes/00_overview.md) | — (read first) | [x] written |
-| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `dataset.py` | [x] **built, 25 tests pass** |
-| 2 | [Attention](notes/02_attention.md) | `attention.py` `config.py` | [x] **built, 25 tests pass** |
+| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `dataset.py` | [x] **built, 26 tests pass** |
+| 2 | [Attention](notes/02_attention.md) | `attention.py` `config.py` | [x] **built, 38 tests pass** |
 | 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [x] **built, 27 tests pass** |
-| 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [x] **built, 26 tests pass** |
-| 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 23 tests pass** |
-| 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [ ] |
-| 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [ ] |
+| 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [x] **built, 37 tests pass** |
+| 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 30 tests pass** |
+| 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 35 tests pass** |
+| 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [ ] — `MODERN` is declared but **refuses to build** until `rope.py` exists |
 
 Design document: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the shapes, the module map,
 the config system, and the reasoning behind each choice.
@@ -67,7 +67,7 @@ src/llm/
   attention.py   causal self-attention, MHA and GQA
   norms.py       LayerNorm, RMSNorm
   ffn.py         GELU MLP, SwiGLU MLP
-  rope.py        rotary position embeddings
+  rope.py        rotary position embeddings (note 7 - not written yet)
   block.py       one transformer block
   model.py       the stack: embeddings -> blocks -> logits
   generate.py    sampling loop (greedy, temperature, top-k, top-p)

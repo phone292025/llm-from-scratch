@@ -71,7 +71,10 @@ Design choices in [ARCHITECTURE.md](ARCHITECTURE.md) that the lecture data backs
 | Vocab 50,257 for English | Monolingual models sit at 30–50k. Multilingual need 100–250k |
 
 One extra: **modern models drop bias terms everywhere**, not just on QKV — for memory and
-optimization stability. Our `SMALL` now sets `qkv_bias=False`; `GPT2_124M` keeps it, since real
+optimization stability. "Everywhere" takes two flags: `SMALL` sets `qkv_bias=False` *and*
+`linear_bias=False`, the second covering the attention output projection and the GELU MLP.
+Setting only the first leaves three bias tensors per block in a model documented as having none.
+`GPT2_124M` keeps both, since real
 GPT-2 has it and weight loading requires it.
 
 ---
