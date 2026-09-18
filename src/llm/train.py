@@ -15,6 +15,7 @@ See notes/05_training.md.
 from __future__ import annotations
 
 import argparse
+import json
 import itertools
 import math
 import time
@@ -125,8 +126,19 @@ def train(
     tok: BPETokenizer | None = None,
     device: torch.device | None = None,
     verbose: bool = True,
+    resume_from: str | Path | None = None,
+    metrics_path: str | Path | None = None,
 ) -> dict:
-    """Run the loop. Returns the loss history."""
+    """Run the loop. Returns the loss history.
+
+    `resume_from`: a checkpoint to continue from -- weights, Adam's moment estimates, the
+    scheduler's position and the step count. Without all of them a restart is visible in the loss
+    curve: fresh moments cause a spike, and a fresh scheduler restarts warmup.
+
+    `metrics_path`: a JSONL file every step and every evaluation is appended to as it happens. The
+    in-memory history dies with the process; this is what survives a crash, and what the final
+    loss curve is drawn from when a run was resumed partway through.
+    """
     if tcfg.max_steps < 1:
         raise ValueError(f"max_steps={tcfg.max_steps} must be >= 1")
     if tcfg.accum_steps < 1:
@@ -154,9 +166,39 @@ def train(
     history: dict[str, list] = {"step": [], "train_loss": [], "val_step": [], "val_loss": [], "lr": []}
     batches = _infinite(train_loader)
     tokens_seen = 0
+    elapsed_before = 0.0
+    start_step = 0
+
+    if resume_from is not None and Path(resume_from).exists():
+        extras: dict = {}
+        done = checkpoint.load(resume_from, model, optimizer, scheduler, device, extras)
+        start_step = done + 1
+        tokens_seen = int(extras.get("tokens_seen", 0))
+        elapsed_before = float(extras.get("elapsed", 0.0))
+        if verbose:
+            print(f"  resumed from {resume_from} at step {start_step} "
+                  f"({tokens_seen:,} tokens, {elapsed_before / 60:.1f} min already done)\n")
+
+    metrics = None
+    if metrics_path is not None:
+        Path(metrics_path).parent.mkdir(parents=True, exist_ok=True)
+        # Append, not overwrite: a resumed run continues the record of the run it resumes.
+        metrics = open(metrics_path, "a", encoding="utf-8")
+
+    def record(**fields) -> None:
+        if metrics is not None:
+            metrics.write(json.dumps(fields) + "\n")
+            metrics.flush()
+
+    def save_latest(step: int) -> None:
+        checkpoint.save(
+            Path(tcfg.out_dir) / "latest.pt", model, optimizer, scheduler, step, model.cfg,
+            tokens_seen=tokens_seen, elapsed=elapsed_before + time.perf_counter() - start,
+        )
+
     start = time.perf_counter()
 
-    for step in range(tcfg.max_steps):
+    for step in range(start_step, tcfg.max_steps):
         optimizer.zero_grad(set_to_none=True)
         # Summed on the device. Calling .item() per micro-batch forces a sync each time, which
         # stalls the pipeline for a number nothing reads until the step is over.
@@ -195,12 +237,17 @@ def train(
         history["step"].append(step)
         history["train_loss"].append(accumulated)
         history["lr"].append(lr)
+        record(kind="train", step=step, loss=accumulated, lr=lr, tokens=tokens_seen)
 
         if verbose and tcfg.log_every and (step % tcfg.log_every == 0 or step == tcfg.max_steps - 1):
-            elapsed = time.perf_counter() - start
+            # Throughput since this process started, so a resume does not dilute it with the
+            # tokens a previous process saw.
+            run = time.perf_counter() - start
+            done_here = (step - start_step + 1) * tcfg.batch_size * tcfg.accum_steps
+            done_here *= x.shape[1]
             print(
                 f"  step {step:>5}  loss {accumulated:7.4f}  ppl {math.exp(min(accumulated, 20)):>9,.1f}"
-                f"  lr {lr:.2e}  {tokens_seen / max(elapsed, 1e-9):>8,.0f} tok/s"
+                f"  lr {lr:.2e}  {done_here / max(run, 1e-9):>8,.0f} tok/s"
             )
 
         is_last = step == tcfg.max_steps - 1
@@ -208,6 +255,7 @@ def train(
             stats = evaluate(model, val_loader, tcfg.eval_batches, device)
             history["val_step"].append(step)
             history["val_loss"].append(stats["loss"])
+            record(kind="eval", step=step, loss=stats["loss"], tokens=tokens_seen)
             if verbose:
                 print(f"    val loss {stats['loss']:.4f}  perplexity {stats['perplexity']:,.1f}")
 
@@ -215,12 +263,14 @@ def train(
             text = _sample(model, tok, tcfg.sample_prompt, tcfg.sample_tokens, device)
             print(f'    sample: "{text}"')
 
-        if tcfg.save_every and step > 0 and step % tcfg.save_every == 0:
-            checkpoint.save(
-                Path(tcfg.out_dir) / "latest.pt", model, optimizer, scheduler, step, model.cfg
-            )
+        # Saved on the last step too, so a finished run is always resumable -- to train further,
+        # or to evaluate without redoing any of it.
+        if tcfg.save_every and step > start_step and (step % tcfg.save_every == 0 or is_last):
+            save_latest(step)
 
-    history["elapsed"] = time.perf_counter() - start
+    if metrics is not None:
+        metrics.close()
+    history["elapsed"] = elapsed_before + time.perf_counter() - start
     history["tokens_seen"] = tokens_seen
     # Carried so the plot can draw the right "pure ignorance" line without being told twice.
     history["vocab_size"] = model.cfg.vocab_size
@@ -264,20 +314,67 @@ def plot_history(history: dict, path: str | Path, vocab_size: int | None = None)
     return path
 
 
+def read_metrics(path: str | Path) -> dict:
+    """Rebuild the loss history from a metrics log, for plotting a run that was resumed.
+
+    After a crash the steps since the last checkpoint are trained twice. The later record of each
+    step wins, so the curve shows the run that actually produced the final weights.
+    """
+    train_by_step: dict[int, tuple[float, float]] = {}
+    eval_by_step: dict[int, float] = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if r["kind"] == "train":
+                train_by_step[r["step"]] = (r["loss"], r["lr"])
+            elif r["kind"] == "eval":
+                eval_by_step[r["step"]] = r["loss"]
+    steps = sorted(train_by_step)
+    val_steps = sorted(eval_by_step)
+    return {
+        "step": steps,
+        "train_loss": [train_by_step[s][0] for s in steps],
+        "lr": [train_by_step[s][1] for s in steps],
+        "val_step": val_steps,
+        "val_loss": [eval_by_step[s] for s in val_steps],
+    }
+
+
+def _load_split(path: str | Path) -> np.ndarray:
+    from llm.dataset import load_tokens
+
+    return load_tokens(path)
+
+
 def main() -> None:
     use_utf8()
     p = argparse.ArgumentParser(description="Train a GPT.")
     p.add_argument("--preset", default="small", choices=list(PRESETS))
-    p.add_argument("--data", default="data/raw/the-verdict.txt")
+    p.add_argument("--data", default="data/raw/the-verdict.txt",
+                   help="a .txt file (split 90/10 here) or a pre-tokenized .bin from llm.prepare")
+    p.add_argument("--val-data", default=None, help="the validation .bin, when --data is a .bin")
+    p.add_argument("--tokenizer", default=None,
+                   help="a tokenizer saved by llm.bpe; default is GPT-2's")
     p.add_argument("--steps", type=int, default=600)
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--accum", type=int, default=1)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--warmup", type=int, default=50)
+    p.add_argument("--min-lr-ratio", type=float, default=0.1)
+    p.add_argument("--weight-decay", type=float, default=0.1)
     p.add_argument("--context", type=int, default=None, help="override context_length")
     p.add_argument("--layers", type=int, default=None, help="override n_layers")
     p.add_argument("--eval-every", type=int, default=50)
+    p.add_argument("--eval-batches", type=int, default=10)
     p.add_argument("--sample-every", type=int, default=100)
+    p.add_argument("--sample-prompt", default="Every effort moves you")
+    p.add_argument("--save-every", type=int, default=0,
+                   help="checkpoint every N steps; a crash then costs at most N steps")
+    p.add_argument("--resume", action="store_true", help="continue from <out>/latest.pt")
+    p.add_argument("--final-eval", action="store_true",
+                   help="score the whole validation set at the end, not a sample of it")
     p.add_argument("--out", default="checkpoints")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--overfit", action="store_true",
@@ -291,15 +388,36 @@ def main() -> None:
     if args.layers:
         cfg = replace(cfg, n_layers=args.layers)
 
-    tok = BPETokenizer()
-    train_ids, val_ids = load_text_corpus(args.data, tok)
-    check_vocabulary(cfg, train_ids, f"{args.data} (train split)")
-    check_vocabulary(cfg, val_ids, f"{args.data} (validation split)")
+    if args.tokenizer:
+        from llm.bpe import Tokenizer
 
-    stride = cfg.context_length // 4  # overlap, so a small corpus yields enough windows
+        tok = Tokenizer.load(args.tokenizer)
+    else:
+        tok = BPETokenizer()
+    if tok.vocab_size != cfg.vocab_size:
+        # Caught here, before a single step: an embedding table the wrong size for the tokenizer
+        # either crashes on an out-of-range id or silently wastes rows that are never used.
+        raise SystemExit(
+            f"tokenizer has {tok.vocab_size:,} tokens but preset '{args.preset}' expects "
+            f"{cfg.vocab_size:,}. Pass the matching --tokenizer, or a matching --preset."
+        )
+
+    if str(args.data).endswith(".bin"):
+        if not args.val_data:
+            raise SystemExit("--data is a .bin, so --val-data must name the validation .bin")
+        train_ids, val_ids = _load_split(args.data), _load_split(args.val_data)
+        # A real corpus has far more text than the run will see, so windows need not overlap.
+        stride = cfg.context_length
+    else:
+        train_ids, val_ids = load_text_corpus(args.data, tok)
+        stride = cfg.context_length // 4  # overlap, so a small corpus yields enough windows
+    check_vocabulary(cfg, train_ids, f"{args.data} (train)")
+    check_vocabulary(cfg, val_ids, f"{args.val_data or args.data} (validation)")
+
     train_loader = make_dataloader(train_ids, cfg.context_length, stride, args.batch_size)
     val_loader = make_dataloader(
-        val_ids, cfg.context_length, stride, args.batch_size, shuffle=False, drop_last=False
+        val_ids, cfg.context_length, cfg.context_length, args.batch_size,
+        shuffle=False, drop_last=False,
     )
 
     tcfg = TrainConfig(
@@ -308,8 +426,13 @@ def main() -> None:
         accum_steps=args.accum,
         max_steps=args.steps,
         warmup_steps=args.warmup,
+        min_lr_ratio=args.min_lr_ratio,
+        weight_decay=args.weight_decay,
         eval_every=args.eval_every,
+        eval_batches=args.eval_batches,
         sample_every=args.sample_every,
+        sample_prompt=args.sample_prompt,
+        save_every=args.save_every,
         out_dir=Path(args.out),
         seed=args.seed,
         **({"weight_decay": 0.0, "min_lr_ratio": 0.0} if args.overfit else {}),
@@ -322,25 +445,47 @@ def main() -> None:
     torch.manual_seed(tcfg.seed)
     model = GPTModel(cfg)
 
+    out = Path(args.out)
+    metrics_path = out / "metrics.jsonl"
+    resume_from = out / "latest.pt" if args.resume else None
+    if not args.resume and metrics_path.exists():
+        # A fresh run must not append to a previous run's record and draw both as one curve.
+        metrics_path.unlink()
+
+    tokens_per_step = args.batch_size * args.accum * cfg.context_length
     print(f"device       {device}  ({torch.cuda.get_device_name(0) if device.type == 'cuda' else ''})")
-    print(f"preset       {args.preset}  {model.num_parameters():,} parameters")
-    print(f"corpus       {args.data}  {len(train_ids):,} train / {len(val_ids):,} val tokens")
-    print(f"windows      {len(train_loader.dataset):,} train (context {cfg.context_length}, stride {stride})")
-    print(f"schedule     {args.steps} steps, warmup {args.warmup}, lr {args.lr}, seed {args.seed}")
+    print(f"preset       {args.preset}  {model.num_parameters():,} parameters "
+          f"({model.num_parameters(non_embedding=True):,} non-embedding)")
+    print(f"tokenizer    {args.tokenizer or 'GPT-2 (tiktoken)'}  {tok.vocab_size:,} tokens")
+    print(f"corpus       {len(train_ids):,} train / {len(val_ids):,} val tokens")
+    print(f"schedule     {args.steps:,} steps x {tokens_per_step:,} tokens = "
+          f"{args.steps * tokens_per_step:,} tokens; warmup {args.warmup}, lr {args.lr}")
+    if args.save_every:
+        print(f"checkpoints  every {args.save_every} steps -> {out / 'latest.pt'}")
     if args.overfit:
         print("mode         overfit - weight decay and LR floor disabled so loss can reach ~0")
     print()
 
-    history = train(model, train_loader, val_loader, tcfg, tok, device)
+    history = train(
+        model, train_loader, val_loader, tcfg, tok, device,
+        resume_from=resume_from, metrics_path=metrics_path,
+    )
 
-    out = Path(args.out)
-    checkpoint.save(out / "final.pt", model, step=tcfg.max_steps, cfg=cfg)
-    curve = plot_history(history, out / "loss.png", cfg.vocab_size)
+    checkpoint.save(out / "final.pt", model, step=tcfg.max_steps, cfg=cfg,
+                    tokens_seen=history["tokens_seen"])
+    # Drawn from the log rather than memory, so a resumed run plots from step 0.
+    curve = plot_history(read_metrics(metrics_path), out / "loss.png", cfg.vocab_size)
 
-    print(f"\nfinished in {history['elapsed']:.1f}s, {history['tokens_seen']:,} tokens seen")
-    print(f"train loss {history['train_loss'][0]:.4f} -> {history['train_loss'][-1]:.4f}")
-    if history["val_loss"]:
-        print(f"val   loss {history['val_loss'][0]:.4f} -> {history['val_loss'][-1]:.4f}")
+    print(f"\nfinished: {history['tokens_seen']:,} tokens, {history['elapsed'] / 60:.1f} min in total")
+    if history["train_loss"]:
+        print(f"train loss {history['train_loss'][-1]:.4f} (last step)")
+    if args.final_eval:
+        print("scoring the full validation set...")
+        stats = evaluate(model, val_loader, max_batches=None, device=device)
+        print(f"VALIDATION LOSS {stats['loss']:.4f}  perplexity {stats['perplexity']:.2f}  "
+              f"({stats['batches']:,} batches)")
+        record_path = out / "final_eval.json"
+        record_path.write_text(json.dumps({**stats, "tokens_seen": history["tokens_seen"]}))
     print(f"saved {out / 'final.pt'}" + (f" and {curve}" if curve else ""))
 
 

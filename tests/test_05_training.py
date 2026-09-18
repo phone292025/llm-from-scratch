@@ -377,3 +377,76 @@ def test_load_text_corpus_splits_without_overlap(tmp_path) -> None:
     train_ids, val_ids = load_text_corpus(path, BPETokenizer(), val_fraction=0.1)
     assert len(val_ids) > 0
     assert abs(len(val_ids) / (len(train_ids) + len(val_ids)) - 0.1) < 0.02
+
+
+# --- crash safety ---------------------------------------------------------------------------------
+
+
+def _tiny_run(cfg, ids, out, steps, resume=False, save_every=4):
+    from llm.train import TrainConfig, train
+
+    loader = make_dataloader(ids, CTX, CTX, batch_size=2)
+    torch.manual_seed(0)
+    model = GPTModel(cfg)
+    tcfg = TrainConfig(max_steps=steps, warmup_steps=2, eval_every=0, log_every=0, bf16=False,
+                       save_every=save_every, out_dir=out)
+    history = train(model, loader, None, tcfg, device=torch.device("cpu"), verbose=False,
+                    resume_from=out / "latest.pt" if resume else None,
+                    metrics_path=out / "metrics.jsonl")
+    return model, history
+
+
+def test_resume_continues_from_the_saved_step(cfg, ids, tmp_path) -> None:
+    """Interrupt a run partway, resume it, and check it picks up where it stopped.
+
+    Nothing short of doing this proves the checkpoint carries everything a restart needs.
+    """
+    _tiny_run(cfg, ids, tmp_path, steps=9, save_every=4)   # saves at 4, 8 and the last step
+    first = torch.load(tmp_path / "latest.pt", weights_only=True)
+    assert first["step"] == 8
+    assert first["tokens_seen"] == 9 * 2 * CTX
+
+    # "Crash" is simulated by running a longer schedule from that checkpoint.
+    _, history = _tiny_run(cfg, ids, tmp_path, steps=14, resume=True, save_every=4)
+    assert history["step"][0] == 9, "resumed run should start at the step after the checkpoint"
+    assert history["tokens_seen"] == 14 * 2 * CTX
+
+
+def test_resume_restores_the_learning_rate_schedule(cfg, ids, tmp_path) -> None:
+    """A fresh scheduler would restart warmup: the LR would drop to near zero mid-run."""
+    from llm.optim import lr_at_step
+
+    _tiny_run(cfg, ids, tmp_path, steps=8, save_every=4)
+    _, history = _tiny_run(cfg, ids, tmp_path, steps=8, resume=True, save_every=4)
+    # The run already finished at step 7, so resuming does no more work.
+    assert history["step"] == []
+
+    _tiny_run(cfg, ids, tmp_path / "b", steps=5, save_every=4)  # checkpoint at 4
+    _, history = _tiny_run(cfg, ids, tmp_path / "b", steps=20, resume=True, save_every=4)
+    assert history["step"][0] == 5
+    # The first resumed step uses step 5's learning rate, not step 0's.
+    expected = 3e-4 * lr_at_step(6, warmup_steps=2, total_steps=20)
+    assert history["lr"][0] == pytest.approx(expected, rel=1e-6)
+
+
+def test_metrics_log_survives_and_prefers_the_latest_record(cfg, ids, tmp_path) -> None:
+    """After a crash the steps since the last checkpoint run twice; the rerun must win."""
+    from llm.train import read_metrics
+
+    _tiny_run(cfg, ids, tmp_path, steps=9, save_every=4)
+    lines_before = (tmp_path / "metrics.jsonl").read_text().count("\n")
+    assert lines_before == 9
+
+    # Pretend the process died after step 8 and a rerun covered 6..8 again.
+    with open(tmp_path / "metrics.jsonl", "a") as f:
+        f.write('{"kind": "train", "step": 7, "loss": 1.234, "lr": 0.0001, "tokens": 0}\n')
+    history = read_metrics(tmp_path / "metrics.jsonl")
+    assert history["step"] == list(range(9))
+    assert history["train_loss"][7] == 1.234
+
+
+def test_checkpoint_extras_round_trip(cfg, tmp_path) -> None:
+    extras = {}
+    checkpoint.save(tmp_path / "c.pt", GPTModel(cfg), step=3, cfg=cfg, tokens_seen=12345)
+    checkpoint.load(tmp_path / "c.pt", GPTModel(cfg), extras=extras)
+    assert extras["tokens_seen"] == 12345 and extras["step"] == 3

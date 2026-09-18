@@ -59,8 +59,13 @@ def load(
     optimizer: optim.Optimizer | None = None,
     scheduler: optim.lr_scheduler.LRScheduler | None = None,
     map_location: str | torch.device = "cpu",
+    extras: dict | None = None,
 ) -> int:
-    """Restore into the objects given, and return the step the run had reached."""
+    """Restore into the objects given, and return the step the run had reached.
+
+    Pass a dict as `extras` to receive everything else that was saved alongside -- tokens seen,
+    elapsed time -- so a resumed run reports totals for the whole run rather than since restart.
+    """
     # weights_only=True refuses to unpickle arbitrary objects. Our payload is tensors and plain
     # data, so it costs nothing and closes the door on loading a hostile checkpoint.
     ckpt = torch.load(Path(path), map_location=map_location, weights_only=True)
@@ -69,6 +74,10 @@ def load(
         optimizer.load_state_dict(ckpt["optimizer"])
     if scheduler is not None and "scheduler" in ckpt:
         scheduler.load_state_dict(ckpt["scheduler"])
+    if extras is not None:
+        extras.update(
+            {k: v for k, v in ckpt.items() if k not in ("model", "optimizer", "scheduler")}
+        )
     return int(ckpt.get("step", 0))
 
 
