@@ -143,13 +143,12 @@ Added to [ROADMAP.md](ROADMAP.md) under v2.
 
 ## 6. Open decisions
 
-**Should we write a BPE trainer after all?** [Note 1](../notes/01_data_and_tokens.md) argues no —
-it teaches compression, not modeling. That still holds, but the vocabulary finding above is a real
-counterweight: for a small model on a simple corpus, a corpus-trained 10k vocabulary is the single
-largest parameter-efficiency win available, worth more than any architecture change in v2. CS336
-budgets ≤30 minutes for it and has students do it.
-
-It also becomes unavoidable if the training data turns out to be Burmese.
+**Should we write a BPE trainer after all?** *Resolved: yes, and it is built* — `src/llm/bpe.py`.
+The deciding argument was not efficiency but comparability. Choosing TinyStories for its published
+1.80 target means matching CS336's tokenizer, because cross-entropy is not comparable across
+vocabularies. It reproduces CS336's worked-example merge sequence exactly, and given GPT-2's
+merges its encoder matches tiktoken's output token for token. See
+[note 1 §3](../notes/01_data_and_tokens.md).
 
 **Do we still want the GPT-2 weight-loading oracle?** Yes — it is unaffected. `GPT2_124M` keeps the
 50,257 vocabulary and the bias terms precisely so that it can load real weights. Only the models we

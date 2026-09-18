@@ -102,6 +102,12 @@ def main() -> None:
     print(f"    without cache {timings[False]:>7.2f}s   ({n / timings[False]:>6.1f} tok/s)")
     print(f"    with cache    {timings[True]:>7.2f}s   ({n / timings[True]:>6.1f} tok/s)")
     print(f"    speedup       {timings[False] / timings[True]:>7.1f}x")
+    if device == "cuda":
+        print("\n  Smaller than the O(T^2) -> O(T) argument promises, and that is real, not a bug.")
+        print("  A 124M model on a GPU spends each step launching ~200 small kernels, not doing")
+        print("  arithmetic; the cache removes arithmetic that was never the bottleneck. On CPU,")
+        print("  where arithmetic dominates, the same 150 tokens run ~6x faster with the cache,")
+        print("  and on a GPU the gap opens as the model and the context grow.")
 
     megabytes = KVCache.predicted_bytes(model.cfg, 1, model.cfg.context_length) / 1024**2
     print(f"\n  The cost is memory: {megabytes:.0f} MB per sequence at the full "

@@ -85,6 +85,29 @@ def test_cached_sampling_matches_uncached_for_the_same_seed(
     assert torch.equal(a, b)
 
 
+@pytest.mark.parametrize("attn", ["manual", "sdpa"])
+@pytest.mark.parametrize("n_kv_heads", [None, 2])
+def test_chunked_prefill_matches_one_full_forward(
+    cfg: ModelConfig, attn: str, n_kv_heads: int | None
+) -> None:
+    """Three routes through cached attention, each checked against the plain forward pass.
+
+    A first chunk (empty cache, square causal mask), a second multi-token chunk (a prefix is
+    cached, so the mask is the triangle shifted right), then single tokens (no mask at all).
+    generate() only ever uses the first and last, so without this the shifted mask would be
+    exercised by nothing.
+    """
+    torch.manual_seed(0)
+    m = GPTModel(replace(cfg, attn=attn, n_kv_heads=n_kv_heads)).eval()
+    ids = torch.randint(0, cfg.vocab_size, (B, 11))
+    with torch.no_grad():
+        full = m(ids)
+        cache = KVCache(m.cfg, batch_size=B, max_len=cfg.context_length)
+        pieces = [m(ids[:, :4], cache=cache), m(ids[:, 4:9], cache=cache)]
+        pieces += [m(ids[:, i : i + 1], cache=cache) for i in range(9, 11)]
+    assert torch.allclose(torch.cat(pieces, dim=1), full, atol=1e-5)
+
+
 def test_cache_survives_running_past_the_context_window(
     cfg: ModelConfig, model: GPTModel, prompt: torch.Tensor
 ) -> None:

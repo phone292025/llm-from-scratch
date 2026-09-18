@@ -3,7 +3,8 @@
 Turning text into batches of integers the model can consume. Unglamorous, and the source of more
 silent bugs than the model itself.
 
-**Produces:** `src/llm/tokenizer.py`, `src/llm/dataset.py`, `tests/test_01_data.py`
+**Produces:** `src/llm/tokenizer.py`, `src/llm/bpe.py`, `src/llm/dataset.py`,
+`tests/test_01_data.py`, `tests/test_bpe.py`
 
 ---
 
@@ -60,20 +61,59 @@ Notice `" the"` with the leading space. GPT-2's BPE attaches the space to the *f
 everyone up at least once, usually when hand-building a prompt and wondering why output quality
 collapsed.
 
-## 3. Why I am not writing a BPE trainer
+## 3. Two tokenizers, and why we ended up writing a trainer
 
-Implementing the merge loop teaches data compression. It teaches nothing about language modeling,
-and a subtle bug in it silently degrades everything downstream in a way no test will catch. The
-algorithm above is the whole idea — running it is not additionally enlightening.
+**The original argument, kept because it was reasonable.** An earlier version of this section said
+we would not write a BPE trainer: the merge loop teaches data compression rather than language
+modeling, a subtle bug in it degrades everything downstream silently, and `tiktoken` — GPT-2's
+actual vocabulary — was already available and buys the GPT-2 weight-loading oracle.
 
-So: `tiktoken`, GPT-2's actual vocabulary. This also buys the GPT-2 weight-loading oracle, which
-requires the exact same vocabulary.
+**What changed.** The project chose TinyStories as its first real corpus, because CS336 publishes a
+target for it: validation loss **1.80**. That number was measured with a specific tokenizer — a
+10,000-token BPE trained on TinyStories itself. And **cross-entropy is not comparable across
+vocabularies**: the same text split into different tokens produces a different loss, because each
+token carries a different amount of information. With GPT-2's 50,257-token vocabulary our loss would
+be on a different scale, and the target would tell us nothing. Matching the target means matching
+the tokenizer. The trainer stopped being optional.
 
-**The exception:** if the corpus is mostly Burmese, this decision inverts. GPT-2's BPE has
-essentially no Burmese merges, so it falls back to raw bytes — **about 3 tokens per character**,
-against 0.25 for English. A 12× cost on context, compute and memory, with capacity wasted on
-reassembling bytes. In that case a custom tokenizer is worth more than every architecture upgrade
-in the roadmap combined, and we build the trainer. See [DATA_GUIDE](../docs/DATA_GUIDE.md).
+It also turned out to be the largest efficiency win available. At `emb_dim=512` a 50,257-row
+embedding table is 67% of the `small` model; a 10,000-row one is 29% of `tinystories`. No
+architecture change in the roadmap comes close.
+
+**So there are now two, used for different things:**
+
+| | `tokenizer.BPETokenizer` | `bpe.Tokenizer` |
+|---|---|---|
+| Vocabulary | GPT-2's 50,257, via `tiktoken` | trained by us, any size |
+| Used for | loading GPT-2 weights, the oracle | training our own models |
+| Trainer | none needed | `llm.bpe.train_bpe` |
+
+Both have the same interface, so the dataset and training code take either.
+
+**How the trainer is verified.** A tokenizer bug is exactly the silent kind, so it is checked three
+independent ways:
+
+1. **CS336's worked examples** — the exact merge sequence `s t, e st, o w, l ow, w est, n e, ...`,
+   `newest → [ne, west]`, and `"the cat ate" → [9, 7, 1, 5, 10, 3]`.
+2. **Against a naive reference.** The fast trainer only updates pair counts for words touched by
+   each merge; a from-scratch version recounts everything every round. They must agree exactly.
+3. **Against tiktoken.** GPT-2's merge list can be recovered from tiktoken's ranks. Given those
+   50,000 merges, our encoder produces **the same ids as tiktoken** on arbitrary text — CJK, emoji,
+   Burmese, code, whitespace runs. That proves the encoding logic against a production tokenizer.
+
+**One bug this caught worth knowing about.** Encoding a stream in chunks is not the same as
+encoding each chunk and concatenating. GPT-2's whitespace rule splits `"\n\n   \n\nmat"` as
+`"\n\n   \n"` + `"\n"` because it can see the `m` coming — encode the prefix alone, with nothing
+after it, and the same run becomes one token. Contractions have the same problem: `'l` at the end of
+a chunk is punctuation plus a letter, `'ll` once the next chunk arrives. Measured, naive
+split-and-re-encode was wrong at 10 of 23 cut points on one test string and 13 of 25 on another.
+`encode_iterable` now emits tokens as segmented in the whole buffer and holds back a margin, and a
+test tries every possible cut position.
+
+**The Burmese point still stands, more strongly.** GPT-2's BPE has essentially no Burmese merges,
+so it falls back to raw bytes — **about 3 tokens per character**, against 0.25 for English, a 12×
+cost on context, compute and memory. With the trainer in place, that is now a one-command fix:
+train a vocabulary on Burmese text. See [DATA_GUIDE](../docs/DATA_GUIDE.md).
 
 I will still write the naive word-level tokenizer first — about 40 lines — because feeling it break
 on an unseen word is worth more than reading that it does.

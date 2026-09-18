@@ -15,12 +15,12 @@ Nothing gets coded until its note is read.
 | # | Note | Builds | Status |
 |---|------|--------|--------|
 | 0 | [The mental model](notes/00_overview.md) | — (read first) | [x] written |
-| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `dataset.py` | [x] **built, 26 tests pass** |
+| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `bpe.py` `dataset.py` | [x] **built, 99 tests pass** |
 | 2 | [Attention](notes/02_attention.md) | `attention.py` `config.py` | [x] **built, 38 tests pass** |
 | 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [x] **built, 27 tests pass** |
 | 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [x] **built, 37 tests pass** |
 | 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 30 tests pass** |
-| 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 35 tests pass** |
+| 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 39 tests pass** |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [ ] — `MODERN` is declared but **refuses to build** until `rope.py` exists |
 
 Design document: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the shapes, the module map,
@@ -62,7 +62,8 @@ Verify the GPU before writing any model code. If this prints a number, everythin
 ```
 src/llm/
   config.py      one dataclass that describes any model I can build
-  tokenizer.py   text <-> token ids
+  tokenizer.py   text <-> token ids, with GPT-2's vocabulary (for the oracle)
+  bpe.py         train our own BPE vocabulary, and encode with it
   dataset.py     sliding-window batches
   attention.py   causal self-attention, MHA and GQA
   norms.py       LayerNorm, RMSNorm

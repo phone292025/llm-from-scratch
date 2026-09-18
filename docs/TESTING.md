@@ -10,7 +10,7 @@ Every command here was run and passes. Paths assume you are in `C:\Users\phone\D
 .venv/Scripts/python -m pytest tests/ -q
 ```
 
-193 tests, about 40 seconds. If this is green, the implementation is correct as far as anything
+270 tests, about 30 seconds. If this is green, the implementation is correct as far as anything
 can tell you without training a model.
 
 Per note, when you want to know *which* part broke:
@@ -25,7 +25,7 @@ Per note, when you want to know *which* part broke:
 
 ## The tests that actually matter
 
-Most of the 193 are shape checks. These six are the ones that would catch a real disaster:
+Most of the 197 are shape checks. These six are the ones that would catch a real disaster:
 
 ```bash
 .venv/Scripts/python -m pytest tests/ -k "causality or manual_matches_sdpa or layernorm_matches_pytorch or repeated_batch or identical_to_uncached or rope_config_is_refused" -v
@@ -62,6 +62,13 @@ pieces, and the sliding window — `x` and `targets` side by side so the one-tok
 Also measures the Burmese penalty: 0.35 characters per token against English's 3.83.
 
 ```bash
+.venv/Scripts/python scripts/demo_bpe.py
+```
+Training a tokenizer. Watch a vocabulary get learned from raw bytes: the first merges it
+discovers (` t`, `he`, ` the`), compression climbing from 1.00 to 3.69 bytes per token as the
+vocabulary grows, and one word splitting differently at each size. CPU only, a few seconds.
+
+```bash
 .venv/Scripts/python scripts/demo_02.py
 ```
 Attention. Prints a real attention matrix with tokens on both axes, demonstrates causality by
@@ -84,6 +91,12 @@ GPT-2 weights loaded into our code (fluent English). Downloads 548 MB the first 
 ```
 Trains a model in front of you. ~25 seconds. Loss falls 10.93 → 0.003 and the samples go from
 `"Mostly Mostly standalone standalone"` to real sentences.
+
+```bash
+.venv/Scripts/python scripts/demo_06.py
+```
+Generation. The same prompt under five sampling strategies side by side, what top-k and top-p
+actually leave behind, a cached-vs-uncached parity check, and the cache timed against recomputing.
 
 ---
 
