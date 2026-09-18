@@ -28,15 +28,27 @@ class GPTModel(nn.Module):
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
+        if cfg.pos == "rope":
+            # There is no rope.py yet. Building anyway would hand back a model whose output is
+            # bit-identical to pos="none": attention would be a set operation, the model would
+            # have no idea what order its tokens came in, and it would still train, log a
+            # falling loss and generate text. Nothing downstream can detect that, so it has to
+            # be refused here.
+            raise NotImplementedError(
+                "pos='rope' has no implementation yet -- rotary embeddings arrive in note 7 "
+                "(notes/07_modern_upgrades.md). Building this config now would silently give a "
+                "model with no positional information at all. Use pos='learned', or pos='none' "
+                "if a position-blind ablation is what you meant."
+            )
         self.cfg = cfg
 
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.emb_dim)
-        # RoPE (note 7) is applied inside attention instead, so there is no table for it.
+        # RoPE (note 7) will be applied inside attention instead, so there is no table for it.
         self.pos_emb = (
             nn.Embedding(cfg.context_length, cfg.emb_dim) if cfg.pos == "learned" else None
         )
         self.drop = nn.Dropout(cfg.dropout)
-        self.blocks = nn.ModuleList(TransformerBlock(cfg) for _ in range(cfg.n_layers))
+        self.blocks = nn.ModuleList(TransformerBlock(cfg, i) for i in range(cfg.n_layers))
 
         # Pre-norm blocks normalize on the way in, so the last block's output is unnormalized.
         # Omitting this trains fine and underperforms silently -- the kind of bug the GPT-2
@@ -75,22 +87,37 @@ class GPTModel(nn.Module):
                 block.ffn.down.weight.mul_(scale)
 
     def forward(
-        self, idx: Tensor, targets: Tensor | None = None
+        self, idx: Tensor, targets: Tensor | None = None, cache=None
     ) -> Tensor | tuple[Tensor, Tensor]:
-        """idx: (B, T) token ids. Returns logits (B, T, V), or (logits, loss) given targets."""
+        """idx: (B, T) token ids. Returns logits (B, T, V), or (logits, loss) given targets.
+
+        With a `cache`, `idx` holds only the *new* tokens and positions continue from where the
+        cache left off.
+        """
         _, T = idx.shape
-        if T > self.cfg.context_length:
+        if T == 0:
+            # A language model has nothing to condition on. Reshaping an empty tensor fails
+            # several layers down with a message about dimension -1, which explains nothing.
+            raise ValueError("idx is empty; a model needs at least one token to predict from")
+        offset = cache.pos if cache is not None else 0
+        if offset + T > self.cfg.context_length:
             raise ValueError(
-                f"sequence length {T} exceeds context_length {self.cfg.context_length}"
+                f"sequence length {offset + T} exceeds context_length {self.cfg.context_length}"
             )
 
         h = self.tok_emb(idx)
         if self.pos_emb is not None:
-            h = h + self.pos_emb(torch.arange(T, device=idx.device))
+            # Offset matters: a token decoded at absolute position 40 must get position 40's
+            # embedding, not position 0's.
+            h = h + self.pos_emb(torch.arange(offset, offset + T, device=idx.device))
         h = self.drop(h)
 
         for block in self.blocks:
-            h = block(h)
+            h = block(h, cache=cache)
+
+        # Once per forward, not once per layer - every layer wrote at the same position.
+        if cache is not None:
+            cache.advance(T)
 
         logits = self.head(self.final_norm(h))
         if targets is None:

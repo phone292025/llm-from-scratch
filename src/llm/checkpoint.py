@@ -10,6 +10,7 @@ See notes/05_training.md section 6.
 from __future__ import annotations
 
 import dataclasses
+import os
 from pathlib import Path
 
 import torch
@@ -41,7 +42,14 @@ def save(
         payload["optimizer"] = optimizer.state_dict()
     if scheduler is not None:
         payload["scheduler"] = scheduler.state_dict()
-    torch.save(payload, path)
+
+    # Write beside the target, then rename. torch.save straight onto `path` truncates it first,
+    # so a crash or a full disk midway through leaves a corrupt file where the last good
+    # checkpoint used to be -- and periodic saves overwrite the same name every time, so that is
+    # the whole run gone. os.replace is atomic on both Windows and POSIX.
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
     return path
 
 

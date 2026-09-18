@@ -137,7 +137,12 @@ def test_batched_heads_match_the_naive_loop(cfg: ModelConfig, x: torch.Tensor) -
     cfg = replace(cfg, qkv_bias=False)
     fused = CausalSelfAttention(cfg).eval()
     loop = MultiHeadWrapper(
-        cfg.emb_dim, cfg.emb_dim, cfg.context_length, cfg.n_heads, qkv_bias=False
+        cfg.emb_dim,
+        cfg.emb_dim,
+        cfg.context_length,
+        cfg.n_heads,
+        qkv_bias=False,
+        out_bias=cfg.linear_bias,
     ).eval()
 
     hd, H = cfg.head_dim, cfg.n_heads
@@ -182,13 +187,55 @@ def test_gqa_shares_kv_heads_across_groups(cfg: ModelConfig, x: torch.Tensor) ->
 
 
 def test_rejects_heads_that_do_not_divide_the_embedding(cfg: ModelConfig) -> None:
-    with pytest.raises(ValueError, match="divide evenly"):
+    with pytest.raises(ValueError, match="divisible by"):
         replace(cfg, n_heads=5)
 
 
 def test_rejects_kv_heads_that_do_not_group_evenly(cfg: ModelConfig) -> None:
     with pytest.raises(ValueError, match="multiple of"):
         replace(cfg, n_heads=16, n_kv_heads=5)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("vocab_size", 0),
+        ("context_length", 0),
+        ("n_layers", 0),
+        ("n_heads", 0),
+        ("emb_dim", 0),
+        ("n_kv_heads", 0),
+        ("ffn_hidden", 0),
+        ("dropout", 1.5),
+        ("dropout", -0.1),
+        ("rope_base", 0.0),
+    ],
+)
+def test_config_rejects_impossible_values(cfg: ModelConfig, field: str, value) -> None:
+    """A config is validated once and then trusted for the whole run.
+
+    `n_kv_heads=0` is the one that motivated this: `kv_heads` reads `self.n_kv_heads or
+    self.n_heads`, and 0 is falsy, so it used to fall through to plain MHA. A run set up as MQA
+    silently was not one, the cache was n_heads times larger than intended, and nothing anywhere
+    said so.
+    """
+    with pytest.raises(ValueError):
+        replace(cfg, **{field: value})
+
+
+def test_kv_heads_of_zero_does_not_fall_through_to_mha(cfg: ModelConfig) -> None:
+    with pytest.raises(ValueError, match="n_kv_heads"):
+        replace(cfg, n_kv_heads=0)
+
+
+def test_attention_rejects_more_tokens_than_the_context_holds(cfg: ModelConfig) -> None:
+    """Both backends, because they used to disagree: the manual path raised an opaque broadcast
+    error and SDPA quietly built its own mask and carried on."""
+    for backend in ("manual", "sdpa"):
+        attn = CausalSelfAttention(replace(cfg, attn=backend))
+        too_long = torch.randn(1, cfg.context_length + 1, cfg.emb_dim)
+        with pytest.raises(ValueError, match="exceeds context_length"):
+            attn(too_long)
 
 
 # --- the scaling is not cosmetic ---------------------------------------------------------------

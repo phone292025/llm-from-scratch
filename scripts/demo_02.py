@@ -13,6 +13,7 @@ import torch
 
 from llm.attention import CausalSelfAttention, MultiHeadWrapper, SingleHeadAttention
 from llm.config import SMALL
+from llm.console import use_utf8
 from llm.tokenizer import BPETokenizer
 
 SENTENCE = "The animal did not cross the street because it was too tired"
@@ -32,6 +33,7 @@ def show_matrix(weights: torch.Tensor, labels: list[str], places: int = 2) -> No
 
 
 def main() -> None:
+    use_utf8()
     torch.manual_seed(0)
     tok = BPETokenizer()
     ids = tok.encode(SENTENCE)

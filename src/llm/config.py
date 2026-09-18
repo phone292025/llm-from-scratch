@@ -37,14 +37,46 @@ class ModelConfig:
 
     qkv_bias: bool = True
     """GPT-2 has a bias on the QKV projection. Later work found it contributes nothing."""
+    linear_bias: bool = True
+    """Bias on the *other* linear layers: the attention output projection and the GELU MLP.
+
+    GPT-2 has them, so the default is True and the checkpoint loads. Modern models (Llama, PaLM,
+    Gemma) drop biases everywhere, which is why SMALL and MODERN set this False -- `qkv_bias`
+    alone is not enough to make a bias-free model, and believing otherwise leaves three bias
+    tensors per block that the config claims are gone. SwiGLU never has biases either way.
+    """
     tie_weights: bool = True
     dropout: float = 0.0
     rope_base: float = 10000.0
 
     def __post_init__(self) -> None:
+        # Everything here is cheap and runs once. A config that is quietly wrong costs hours:
+        # n_kv_heads=0 used to pass straight through `kv_heads` (0 is falsy) and silently build
+        # plain MHA, so a run intended as MQA was not one and nothing said so.
+        positive = {
+            "vocab_size": self.vocab_size,
+            "context_length": self.context_length,
+            "n_layers": self.n_layers,
+            "n_heads": self.n_heads,
+            "emb_dim": self.emb_dim,
+        }
+        for name, value in positive.items():
+            if value < 1:
+                raise ValueError(f"{name}={value} must be >= 1")
+        if self.n_kv_heads is not None and self.n_kv_heads < 1:
+            raise ValueError(
+                f"n_kv_heads={self.n_kv_heads} must be >= 1, or None for one per query head"
+            )
+        if self.ffn_hidden is not None and self.ffn_hidden < 1:
+            raise ValueError(f"ffn_hidden={self.ffn_hidden} must be >= 1, or None for the default")
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError(f"dropout={self.dropout} must be in [0, 1)")
+        if self.rope_base <= 0:
+            raise ValueError(f"rope_base={self.rope_base} must be positive")
+
         if self.emb_dim % self.n_heads:
             raise ValueError(
-                f"emb_dim={self.emb_dim} must divide evenly into n_heads={self.n_heads}"
+                f"emb_dim={self.emb_dim} must be divisible by n_heads={self.n_heads}"
             )
         if self.n_heads % self.kv_heads:
             raise ValueError(
@@ -96,10 +128,14 @@ class ModelConfig:
 
         qkv_out = (self.n_heads + 2 * self.kv_heads) * hd
         attn = d * qkv_out + (qkv_out if self.qkv_bias else 0)  # qkv projection
-        attn += d * d + d  # output projection
+        attn += d * d + (d if self.linear_bias else 0)  # output projection
 
         h = self.ffn_hidden_dim
-        ffn = 3 * d * h if self.act == "swiglu" else (d * h + h) + (h * d + d)
+        if self.act == "swiglu":
+            ffn = 3 * d * h  # gate, up, down -- never biased
+        else:
+            bias = (h + d) if self.linear_bias else 0
+            ffn = d * h + h * d + bias
 
         total = self.vocab_size * d  # token embedding
         if self.pos == "learned":
@@ -117,9 +153,14 @@ GPT2_124M = ModelConfig()
 #: What we actually train. Shape follows CS336 lecture 3 and their validated TinyStories run:
 #: aspect ratio emb_dim/n_layers = 128, inside the 100-200 band that nearly every production
 #: model sits in (BLOOM 205, PaLM 156, GPT-3 128, Llama 102). Bias terms off, as modern models
-#: do everywhere rather than only on QKV.
+#: do everywhere -- which takes both flags, not just `qkv_bias`.
 SMALL = ModelConfig(
-    emb_dim=512, n_layers=4, n_heads=16, context_length=256, qkv_bias=False
+    emb_dim=512,
+    n_layers=4,
+    n_heads=16,
+    context_length=256,
+    qkv_bias=False,
+    linear_bias=False,
 )
 
 #: SMALL with a vocabulary sized for a simple corpus.
@@ -130,6 +171,8 @@ SMALL = ModelConfig(
 TINYSTORIES = replace(SMALL, vocab_size=10_000)
 
 #: v2: the same shape as SMALL, with the modern components. See notes/07_modern_upgrades.md.
+#: **Not yet trainable**: `pos="rope"` has no implementation behind it until note 7, and
+#: `GPTModel` refuses to build it rather than quietly producing a model with no sense of order.
 MODERN = replace(SMALL, norm="rmsnorm", pos="rope", act="swiglu", n_kv_heads=4)
 
 PRESETS: dict[str, ModelConfig] = {

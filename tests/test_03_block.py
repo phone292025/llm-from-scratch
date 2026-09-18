@@ -173,10 +173,10 @@ def test_block_with_zeroed_sublayers_is_the_identity(cfg: ModelConfig, x: torch.
     """Proves the residual wiring: a block that contributes nothing must pass input through."""
     block = TransformerBlock(cfg).eval()
     with torch.no_grad():
-        block.attn.W_o.weight.zero_()
-        block.attn.W_o.bias.zero_()
-        block.ffn.down.weight.zero_()
-        block.ffn.down.bias.zero_()
+        # Biases are optional (cfg.linear_bias), so zero whatever the projections actually have.
+        for projection in (block.attn.W_o, block.ffn.down):
+            for p in projection.parameters():
+                p.zero_()
     assert torch.allclose(block(x), x, atol=1e-6)
 
 
@@ -242,15 +242,22 @@ def test_gradient_reaches_the_first_layer(cfg: ModelConfig) -> None:
 
 
 def test_gradient_vanishes_without_both_residuals_and_normalization(cfg: ModelConfig) -> None:
-    """Remove residuals *and* normalization and the gradient dies on the way down.
+    """Remove residuals *and* normalization and the gradient at layer 0 collapses.
 
     Measured, because the usual claim is too strong. Residuals and normalization are partly
     redundant for gradient flow: with LayerNorm still in place, removing the residuals barely
-    changes the gradient at layer 0 (see the test below). It is losing both that collapses it,
-    by more than ten orders of magnitude.
+    changes the gradient at layer 0 (see the test below). It takes losing both.
+
+    Compared against the real block rather than across depth within the crippled stack. Without
+    normalization the forward signal shrinks at every layer, so the whole stack -- not only its
+    bottom -- arrives at ~1e-15, and a within-model ratio reads as healthy while the model is in
+    fact dead. Whether the decay is progressive or uniform turns on details like whether the
+    linear layers carry biases; the collapse against a working block does not.
     """
-    g = _layer_grads(cfg, _NoResidualNoNorm)
-    assert g[0] / g[-1] < 1e-6, f"layer0={g[0]:.2e} layer11={g[-1]:.2e}"
+    healthy = _layer_grads(cfg, TransformerBlock)
+    crippled = _layer_grads(cfg, _NoResidualNoNorm)
+    ratio = crippled[0] / healthy[0]
+    assert ratio < 1e-6, f"crippled={crippled[0]:.2e} healthy={healthy[0]:.2e}"
 
 
 def test_normalization_alone_also_preserves_gradient(cfg: ModelConfig) -> None:

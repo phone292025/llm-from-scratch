@@ -86,11 +86,51 @@ def test_eval_mode_is_deterministic(cfg: ModelConfig, idx: torch.Tensor) -> None
         assert torch.equal(m(idx), m(idx))
 
 
-@pytest.mark.parametrize("preset", list(PRESETS))
+#: Presets whose positional scheme has an implementation behind it. `modern` asks for RoPE,
+#: which arrives in note 7, so it is excluded here and covered by the guard test below.
+BUILDABLE = [name for name, cfg in PRESETS.items() if cfg.pos != "rope"]
+
+
+@pytest.mark.parametrize("preset", BUILDABLE)
 def test_every_preset_builds_and_runs(preset: str) -> None:
     cfg = replace(PRESETS[preset], n_layers=2, context_length=32)
     ids = torch.randint(0, cfg.vocab_size, (1, 8))
     assert GPTModel(cfg)(ids).shape == (1, 8, cfg.vocab_size)
+
+
+def test_rope_config_is_refused_rather_than_silently_ignored() -> None:
+    """The most expensive bug this repo could ship.
+
+    There is no rope.py yet, so `pos="rope"` used to build a model byte-identical to one with no
+    positional information at all: attention is a set operation, order is invisible, and the run
+    still trains, still logs a falling loss and still emits text. Nothing downstream can detect
+    it. Building has to fail.
+    """
+    cfg = replace(PRESETS["modern"], n_layers=2, context_length=32)
+    with pytest.raises(NotImplementedError, match="note 7"):
+        GPTModel(cfg)
+
+
+def test_position_blindness_is_detectable_when_asked_for_explicitly() -> None:
+    """pos="none" is a legitimate ablation, and this is what it costs.
+
+    One layer, so the last token's output is a pure weighted sum over the prefix. Shuffling that
+    prefix leaves it untouched -- which is exactly the failure a silent `pos="rope"` would have
+    handed us.
+    """
+    cfg = replace(PRESETS["small"], pos="none", n_layers=1, context_length=32, attn="manual")
+    torch.manual_seed(0)
+    m = GPTModel(cfg).eval()
+    a = torch.tensor([[5, 9, 2, 3]])
+    b = torch.tensor([[2, 9, 5, 3]])  # same tokens, same last token, prefix reordered
+    with torch.no_grad():
+        assert torch.allclose(m(a)[0, -1], m(b)[0, -1], atol=1e-5)
+
+    learned = replace(cfg, pos="learned")
+    torch.manual_seed(0)
+    m2 = GPTModel(learned).eval()
+    with torch.no_grad():
+        assert not torch.allclose(m2(a)[0, -1], m2(b)[0, -1], atol=1e-5)
 
 
 # --- parameter accounting ---------------------------------------------------------------------
@@ -107,11 +147,35 @@ def test_gpt2_parameter_count_is_exact() -> None:
     assert GPTModel(replace(GPT2_124M, tie_weights=False)).num_parameters() == 163_037_184
 
 
-def test_parameter_count_matches_config_prediction() -> None:
+@pytest.mark.parametrize("preset", BUILDABLE)
+def test_parameter_count_matches_config_prediction(preset: str) -> None:
     # config.n_params() is used for planning before a model is built, so it must agree.
-    for preset in PRESETS.values():
-        cfg = replace(preset, n_layers=2)
-        assert GPTModel(cfg).num_parameters() == cfg.n_params()
+    cfg = replace(PRESETS[preset], n_layers=2)
+    assert GPTModel(cfg).num_parameters() == cfg.n_params()
+
+
+@pytest.mark.parametrize("qkv_bias", [True, False])
+@pytest.mark.parametrize("linear_bias", [True, False])
+@pytest.mark.parametrize("act", ["gelu", "swiglu"])
+def test_parameter_count_tracks_both_bias_flags(qkv_bias: bool, linear_bias: bool, act: str) -> None:
+    """`qkv_bias` alone does not make a bias-free model.
+
+    It governs the QKV projection only; the attention output projection and the GELU MLP have
+    their own. Predicting the count without accounting for both is how a config comes to claim
+    'no biases' while three tensors per block say otherwise.
+    """
+    cfg = replace(SMALL, n_layers=2, qkv_bias=qkv_bias, linear_bias=linear_bias, act=act)
+    model = GPTModel(cfg)
+    assert model.num_parameters() == cfg.n_params()
+
+    expected = set()
+    if qkv_bias:
+        expected |= {f"blocks.{i}.attn.W_qkv.bias" for i in range(cfg.n_layers)}
+    if linear_bias:
+        expected |= {f"blocks.{i}.attn.W_o.bias" for i in range(cfg.n_layers)}
+        if act == "gelu":  # SwiGLU is unbiased either way
+            expected |= {f"blocks.{i}.ffn.{p}.bias" for i in range(cfg.n_layers) for p in ("up", "down")}
+    assert {n for n, _ in model.named_parameters() if n.endswith(".bias")} == expected
 
 
 def test_tying_shares_storage_rather_than_copying(cfg: ModelConfig) -> None:

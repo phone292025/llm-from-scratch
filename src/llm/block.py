@@ -32,10 +32,10 @@ class TransformerBlock(nn.Module):
     norm after the stack.
     """
 
-    def __init__(self, cfg: ModelConfig) -> None:
+    def __init__(self, cfg: ModelConfig, layer_idx: int = 0) -> None:
         super().__init__()
         self.norm1 = make_norm(cfg)
-        self.attn = CausalSelfAttention(cfg)
+        self.attn = CausalSelfAttention(cfg, layer_idx)
         self.norm2 = make_norm(cfg)
         self.ffn = make_ffn(cfg)
         self.drop = nn.Dropout(cfg.dropout)
@@ -56,9 +56,9 @@ class PostNormBlock(nn.Module):
     original paper's figure. Look for where the norm sits relative to the residual arrow.
     """
 
-    def __init__(self, cfg: ModelConfig) -> None:
+    def __init__(self, cfg: ModelConfig, layer_idx: int = 0) -> None:
         super().__init__()
-        self.attn = CausalSelfAttention(cfg)
+        self.attn = CausalSelfAttention(cfg, layer_idx)
         self.norm1 = make_norm(cfg)
         self.ffn = make_ffn(cfg)
         self.norm2 = make_norm(cfg)

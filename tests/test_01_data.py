@@ -182,6 +182,23 @@ def test_tokenize_corpus_round_trips_through_disk(tmp_path, bpe: BPETokenizer) -
     assert list(loaded) == list(bpe.encode_documents(docs))
 
 
+def test_tokenize_corpus_refuses_ids_that_do_not_fit_on_disk(tmp_path) -> None:
+    """uint16 halves the corpus on disk, and wraps silently past 65535.
+
+    Token 70000 would land as 4464 -- a perfectly legal id, so nothing downstream can notice.
+    The corpus would simply be wrong, for the whole run.
+    """
+
+    class WideTokenizer:
+        eot_id = 70_000
+
+        def encode_documents(self, docs):
+            yield 70_000
+
+    with pytest.raises(ValueError, match="does not fit"):
+        tokenize_corpus(["anything"], tmp_path / "out.bin", WideTokenizer())
+
+
 def test_tokenize_corpus_reports_compression(tmp_path, bpe: BPETokenizer) -> None:
     # ~4 chars per token is the expected ratio for English. A much lower number means the
     # vocabulary is a poor fit for this text - see docs/DATA_GUIDE.md.

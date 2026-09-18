@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from llm.console import use_utf8
 from llm.dataset import SlidingWindowDataset, tokenize_corpus
 from llm.tokenizer import BPETokenizer, SimpleTokenizer
 
@@ -22,6 +23,7 @@ def rule(title: str) -> None:
 
 
 def main() -> None:
+    use_utf8()
     bpe = BPETokenizer()
 
     # 1 -------------------------------------------------------------------------------------

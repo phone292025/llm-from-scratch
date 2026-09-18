@@ -19,6 +19,7 @@ from llm.tokenizer import BPETokenizer
 
 # 50257 fits in uint16, which halves the size of a tokenized corpus on disk.
 TOKEN_DTYPE = np.uint16
+MAX_TOKEN_ID = np.iinfo(TOKEN_DTYPE).max  # 65535
 
 
 class SlidingWindowDataset(Dataset):
@@ -114,7 +115,16 @@ def tokenize_corpus(docs: list[str], out_path: Path, tok: BPETokenizer | None = 
     wrong for this language.
     """
     tok = tok or BPETokenizer()
-    ids = np.fromiter(tok.encode_documents(docs), dtype=TOKEN_DTYPE)
+    # int64 first, then a checked narrowing. Writing straight into uint16 wraps silently --
+    # token 70000 lands on disk as 4464 -- and the corpus is then wrong in a way no later stage
+    # can see, because 4464 is a perfectly legal id.
+    wide = np.fromiter(tok.encode_documents(docs), dtype=np.int64)
+    if wide.size and wide.max() > MAX_TOKEN_ID:
+        raise ValueError(
+            f"token id {wide.max()} does not fit in {TOKEN_DTYPE.__name__} "
+            f"(max {MAX_TOKEN_ID}); widen TOKEN_DTYPE for this tokenizer"
+        )
+    ids = wide.astype(TOKEN_DTYPE)
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +149,9 @@ def load_tokens(path: Path) -> np.ndarray:
 
 
 if __name__ == "__main__":
+    from llm.console import use_utf8
+
+    use_utf8()
     text = "the cat sat on the mat and the dog sat on the log " * 20
     tok = BPETokenizer()
     ids = np.fromiter(tok.encode(text), dtype=TOKEN_DTYPE)

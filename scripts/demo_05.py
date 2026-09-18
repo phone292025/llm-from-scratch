@@ -14,6 +14,7 @@ from pathlib import Path
 import torch
 
 from llm.config import SMALL
+from llm.console import use_utf8
 from llm.dataset import make_dataloader
 from llm.losses import evaluate
 from llm.model import GPTModel
@@ -30,6 +31,7 @@ def rule(title: str) -> None:
 
 
 def main() -> None:
+    use_utf8()
     torch.manual_seed(0)
     device = pick_device()
     tok = BPETokenizer()

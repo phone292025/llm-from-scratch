@@ -20,7 +20,7 @@ from llm.dataset import make_dataloader
 from llm.losses import compute_loss, evaluate
 from llm.model import GPTModel
 from llm.optim import lr_at_step, make_optimizer, make_schedule
-from llm.train import TrainConfig, load_text_corpus, train
+from llm.train import TrainConfig, check_vocabulary, load_text_corpus, plot_history, train
 
 VOCAB, CTX = 512, 32
 
@@ -249,6 +249,73 @@ def test_forgetting_zero_grad_would_be_caught(cfg: ModelConfig) -> None:
     _, loss = model(x, targets=x)
     loss.backward()
     assert torch.allclose(model.tok_emb.weight.grad, 2 * first, atol=1e-5)
+
+
+# --- refusing to start a doomed run -----------------------------------------------------------
+
+
+def test_warmup_longer_than_the_run_is_refused(cfg: ModelConfig, loader) -> None:
+    """Warmup that outlasts the run means the cosine never decays.
+
+    The model finishes at peak learning rate, and the last stretch of decay is where a surprising
+    share of the final loss improvement comes from. Nothing in the log says this happened: the
+    loss falls, the run completes, the result is quietly worse.
+    """
+    with pytest.raises(ValueError, match="never decays"):
+        train(
+            GPTModel(cfg),
+            loader,
+            None,
+            TrainConfig(max_steps=20, warmup_steps=20, bf16=False),
+            device=torch.device("cpu"),
+            verbose=False,
+        )
+
+
+@pytest.mark.parametrize("field,value", [("max_steps", 0), ("accum_steps", 0)])
+def test_nonsensical_step_counts_are_refused(cfg: ModelConfig, loader, field, value) -> None:
+    kwargs = {"max_steps": 20, "warmup_steps": 2, "bf16": False, field: value}
+    tcfg = TrainConfig(**kwargs)
+    with pytest.raises(ValueError, match=field):
+        train(GPTModel(cfg), loader, None, tcfg, device=torch.device("cpu"), verbose=False)
+
+
+def test_vocabulary_mismatch_is_caught_before_the_run_starts(cfg: ModelConfig) -> None:
+    """The failure this replaces is a CUDA device-side assert: asynchronous, so the traceback
+    points somewhere unrelated, and fatal to the context, so nothing after it is recoverable."""
+    corpus = np.array([0, 1, VOCAB], dtype=np.uint16)  # one id past the end of the table
+    with pytest.raises(ValueError, match="vocab_size"):
+        check_vocabulary(cfg, corpus, "test corpus")
+
+    check_vocabulary(cfg, np.array([0, VOCAB - 1], dtype=np.uint16), "test corpus")
+
+
+def test_empty_corpus_is_caught(cfg: ModelConfig) -> None:
+    with pytest.raises(ValueError, match="no tokens"):
+        check_vocabulary(cfg, np.array([], dtype=np.uint16), "test corpus")
+
+
+# --- reporting --------------------------------------------------------------------------------
+
+
+def test_history_carries_the_vocabulary_for_the_plot(cfg: ModelConfig, loader) -> None:
+    """The plot's reference line is ln(vocab_size). Hardcoded at ln(50257) it sits 1.6 nats too
+    high on a 10k-vocabulary run, and every curve under it looks better than it is."""
+    history = train(
+        GPTModel(cfg),
+        loader,
+        None,
+        TrainConfig(max_steps=2, warmup_steps=1, log_every=0, eval_every=0, bf16=False),
+        device=torch.device("cpu"),
+        verbose=False,
+    )
+    assert history["vocab_size"] == cfg.vocab_size
+
+
+def test_plot_history_survives_without_matplotlib(tmp_path) -> None:
+    history = {"step": [0], "train_loss": [1.0], "val_step": [], "val_loss": [], "vocab_size": 64}
+    out = plot_history(history, tmp_path / "loss.png")
+    assert out is None or out.exists()
 
 
 # --- checkpointing ---------------------------------------------------------------------------

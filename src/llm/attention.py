@@ -101,15 +101,16 @@ class MultiHeadWrapper(nn.Module):
         n_heads: int,
         dropout: float = 0.0,
         qkv_bias: bool = False,
+        out_bias: bool = True,
     ) -> None:
         super().__init__()
         if d_out % n_heads:
-            raise ValueError(f"d_out={d_out} must divide evenly into n_heads={n_heads}")
+            raise ValueError(f"d_out={d_out} must be divisible by n_heads={n_heads}")
         self.heads = nn.ModuleList(
             SingleHeadAttention(d_in, d_out // n_heads, context_length, dropout, qkv_bias)
             for _ in range(n_heads)
         )
-        self.W_o = nn.Linear(d_out, d_out)
+        self.W_o = nn.Linear(d_out, d_out, bias=out_bias)
 
     def forward(self, x: Tensor) -> Tensor:
         return self.W_o(torch.cat([head(x) for head in self.heads], dim=-1))
@@ -130,9 +131,10 @@ class CausalSelfAttention(nn.Module):
     notes/02_attention.md section 5.
     """
 
-    def __init__(self, cfg: ModelConfig) -> None:
+    def __init__(self, cfg: ModelConfig, layer_idx: int = 0) -> None:
         super().__init__()
         self.cfg = cfg
+        self.layer_idx = layer_idx
         self.n_heads = cfg.n_heads
         self.kv_heads = cfg.kv_heads
         self.head_dim = cfg.head_dim
@@ -147,7 +149,7 @@ class CausalSelfAttention(nn.Module):
 
         # Without this the heads sit in disjoint slices, unable to influence each other. W_o
         # mixes them back into a single representation.
-        self.W_o = nn.Linear(cfg.emb_dim, cfg.emb_dim)
+        self.W_o = nn.Linear(cfg.emb_dim, cfg.emb_dim, bias=cfg.linear_bias)
 
         self.attn_dropout = nn.Dropout(cfg.dropout)
         self.register_buffer("mask", causal_mask(cfg.context_length), persistent=False)
@@ -171,20 +173,55 @@ class CausalSelfAttention(nn.Module):
         )
 
     def forward(self, x: Tensor, rope=None, cache=None) -> Tensor:
-        """`rope` and `cache` are unused in v1 -- notes 6 and 7 fill them in."""
-        B, T, _ = x.shape
-        q, k, v = self._project(x)
-        k, v = self._expand_kv(k, v)
+        """`rope` is unused in v1 -- note 7 fills it in.
 
-        if self.cfg.attn == "sdpa":
+        With a `cache`, only the new tokens are projected, and they attend over every key and
+        value stored so far.
+        """
+        B, T, _ = x.shape
+        # Checked here rather than left to the mask: the manual path would raise an opaque
+        # broadcast error, and the SDPA path would quietly succeed with `is_causal` building its
+        # own mask, so the same config would be rejected by one backend and accepted by the other.
+        past = cache.pos if cache is not None else 0
+        if past + T > self.cfg.context_length:
+            raise ValueError(
+                f"sequence length {past + T} exceeds context_length "
+                f"{self.cfg.context_length}"
+            )
+        q, k, v = self._project(x)
+
+        if cache is not None:
+            # Cache the *narrow* k and v, before the GQA expansion. Storing the expanded copies
+            # would throw away the memory saving that GQA exists for.
+            k, v = cache.update(self.layer_idx, k, v)
+
+        k, v = self._expand_kv(k, v)
+        dropout = self.dropout if self.training else 0.0
+
+        # One new token after a cached prefix is the whole of steady-state decoding, and it needs
+        # no mask at all: the query sits at the newest position, so every cached key is in its
+        # past. Building the mask anyway costs two aranges and a compare per layer per token,
+        # and handing SDPA any explicit mask moves it off its fastest kernel -- together enough
+        # to make cached decoding measurably *slower* than recomputing everything.
+        unmasked = past > 0 and T == 1
+
+        if self.cfg.attn == "sdpa" and past == 0:
             # Same mathematics as the manual path, but dispatches to FlashAttention: the
             # (B, H, T, T) score tensor is never materialized.
+            ctx = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=dropout)
+        elif self.cfg.attn == "sdpa" and unmasked:
+            ctx = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout)
+        elif self.cfg.attn == "sdpa":
+            # Several new tokens after a prefix (chunked prefill). is_causal assumes queries and
+            # keys are aligned, which stops being true once the cache holds a prefix. attn_mask
+            # is bool with True meaning "may attend".
             ctx = F.scaled_dot_product_attention(
-                q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+                q, k, v, attn_mask=~self._offset_mask(T, past, x.device), dropout_p=dropout
             )
         else:
             scores = q @ k.transpose(-2, -1) / math.sqrt(self.head_dim)
-            scores = scores.masked_fill(self.mask[:T, :T], float("-inf"))
+            if not unmasked:
+                scores = scores.masked_fill(self._offset_mask(T, past, x.device), float("-inf"))
             ctx = self.attn_dropout(torch.softmax(scores, dim=-1)) @ v
 
         # (B, H, T, hd) -> (B, T, H, hd) -> (B, T, d).
@@ -192,6 +229,21 @@ class CausalSelfAttention(nn.Module):
         # how it is laid out, and view needs a contiguous layout.
         ctx = ctx.transpose(1, 2).contiguous().view(B, T, -1)
         return self.W_o(ctx)
+
+    def _offset_mask(self, n_query: int, past: int, device) -> Tensor:
+        """Causal mask for `n_query` new queries attending over `past + n_query` keys.
+
+        Query i sits at absolute position `past + i` and may see keys 0..past+i, so the mask is
+        the usual upper triangle shifted right by `past`. With `past == 0` this is exactly the
+        square causal mask; when decoding one token at a time it is all-False, since a single
+        new query may attend to the entire history.
+        """
+        if past == 0:
+            return self.mask[:n_query, :n_query]
+        total = past + n_query
+        rows = torch.arange(past, total, device=device).unsqueeze(1)
+        cols = torch.arange(total, device=device).unsqueeze(0)
+        return cols > rows
 
     @torch.no_grad()
     def attention_weights(self, x: Tensor) -> Tensor:

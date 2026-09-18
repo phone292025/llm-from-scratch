@@ -13,6 +13,7 @@ from torch import nn
 
 from llm.block import PostNormBlock, TransformerBlock
 from llm.config import SMALL
+from llm.console import use_utf8
 from llm.ffn import GELU, make_ffn
 from llm.norms import LayerNorm, RMSNorm
 
@@ -73,6 +74,7 @@ def bar(value: float, lo: float = 1e-15, hi: float = 1e1) -> str:
 
 
 def main() -> None:
+    use_utf8()
     torch.manual_seed(0)
     x = torch.randn(2, 8, D) * 5 + 3  # deliberately off-centre and wide
 
@@ -161,8 +163,10 @@ def main() -> None:
     blk = TransformerBlock(CFG).eval()
     xs = torch.randn(1, 8, D)
     with torch.no_grad():
-        blk.attn.W_o.weight.zero_(), blk.attn.W_o.bias.zero_()
-        blk.ffn.down.weight.zero_(), blk.ffn.down.bias.zero_()
+        # Biases are optional (cfg.linear_bias), so zero whatever these projections have.
+        for projection in (blk.attn.W_o, blk.ffn.down):
+            for param in projection.parameters():
+                param.zero_()
         print(f"  output == input: {torch.allclose(blk(xs), xs, atol=1e-6)}")
     print("\nThat is the representational argument for residuals, separate from gradients: each")
     print("block reads the residual stream, computes, and adds a correction back. Doing nothing")

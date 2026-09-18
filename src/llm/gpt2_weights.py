@@ -112,7 +112,10 @@ def load_pretrained_gpt2(size: str = "124M") -> GPTModel:
 
 
 if __name__ == "__main__":
+    from llm.console import use_utf8
     from llm.tokenizer import BPETokenizer
+
+    use_utf8()
 
     tok = BPETokenizer()
     model = load_pretrained_gpt2("124M")

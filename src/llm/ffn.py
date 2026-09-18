@@ -46,9 +46,9 @@ class GELUFeedForward(nn.Module):
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
-        self.up = nn.Linear(cfg.emb_dim, cfg.ffn_hidden_dim)
+        self.up = nn.Linear(cfg.emb_dim, cfg.ffn_hidden_dim, bias=cfg.linear_bias)
         self.act = GELU()
-        self.down = nn.Linear(cfg.ffn_hidden_dim, cfg.emb_dim)
+        self.down = nn.Linear(cfg.ffn_hidden_dim, cfg.emb_dim, bias=cfg.linear_bias)
 
     def forward(self, x: Tensor) -> Tensor:
         return self.down(self.act(self.up(x)))

@@ -101,6 +101,9 @@ class BPETokenizer:
 
 
 if __name__ == "__main__":
+    from llm.console import use_utf8
+
+    use_utf8()
     sample = "I HAD always thought Jack Gisburn rather a cheap genius"
 
     simple = SimpleTokenizer.from_text(sample)
