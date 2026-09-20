@@ -71,7 +71,7 @@ src/llm/
   rope.py        rotary position embeddings (note 7 - not written yet)
   block.py       one transformer block
   model.py       the stack: embeddings -> blocks -> logits
-  generate.py    sampling loop (greedy, temperature, top-k, top-p)
+  generate.py    sampling loop (greedy, temperature, top-k, top-p), streamed or whole
   kv_cache.py    fast incremental decoding
   optim.py       AdamW + warmup/cosine schedule + grad clipping
   train.py       the training loop

@@ -348,3 +348,49 @@ def test_empty_prompt_samples_unconditionally_from_eot(cfg: ModelConfig) -> None
 def test_model_refuses_an_empty_batch(model: GPTModel) -> None:
     with pytest.raises(ValueError, match="at least one token"):
         model(torch.zeros(1, 0, dtype=torch.long))
+
+
+# --- streaming -------------------------------------------------------------------------------
+
+
+def test_iter_generate_yields_one_step_at_a_time(cfg: ModelConfig) -> None:
+    from llm.generate import iter_generate
+
+    torch.manual_seed(0)
+    m = GPTModel(cfg).eval()
+    idx = torch.randint(0, cfg.vocab_size, (1, 4))
+    steps = list(iter_generate(m, idx, 7, temperature=0.0))
+    assert len(steps) == 7
+    for next_id, logits in steps:
+        assert next_id.shape == (1, 1)
+        assert logits.shape == (1, cfg.vocab_size)
+
+
+def test_generate_equals_accumulating_the_stream(cfg: ModelConfig) -> None:
+    """generate() is now a thin wrapper over iter_generate, so the two cannot drift apart."""
+    from llm.generate import iter_generate
+
+    torch.manual_seed(0)
+    m = GPTModel(cfg).eval()
+    idx = torch.randint(0, cfg.vocab_size, (2, 5))
+
+    whole = generate(m, idx, 12, temperature=0.9, top_p=0.9, seed=3)
+    streamed = idx
+    for next_id, _ in iter_generate(m, idx, 12, temperature=0.9, top_p=0.9, seed=3):
+        streamed = torch.cat([streamed, next_id], dim=1)
+    assert torch.equal(whole, streamed)
+
+
+def test_streamed_logits_are_before_filtering(cfg: ModelConfig) -> None:
+    """The yielded scores show what the model believed, not what top-p left on the table.
+
+    Filtered logits would be -inf almost everywhere, which would make the chat's "what it was
+    weighing" view show a handful of survivors rather than the real distribution.
+    """
+    from llm.generate import iter_generate
+
+    torch.manual_seed(0)
+    m = GPTModel(cfg).eval()
+    idx = torch.randint(0, cfg.vocab_size, (1, 4))
+    _, logits = next(iter(iter_generate(m, idx, 1, temperature=0.8, top_p=0.5)))
+    assert torch.isfinite(logits).all()

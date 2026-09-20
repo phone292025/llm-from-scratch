@@ -10,7 +10,7 @@ Every command here was run and passes. Paths assume you are in `C:\Users\phone\D
 .venv/Scripts/python -m pytest tests/ -q
 ```
 
-270 tests, about 30 seconds. If this is green, the implementation is correct as far as anything
+277 tests, about 35 seconds. If this is green, the implementation is correct as far as anything
 can tell you without training a model.
 
 Per note, when you want to know *which* part broke:
@@ -25,7 +25,7 @@ Per note, when you want to know *which* part broke:
 
 ## The tests that actually matter
 
-Most of the 197 are shape checks. These six are the ones that would catch a real disaster:
+Most of them are shape checks. These six are the ones that would catch a real disaster:
 
 ```bash
 .venv/Scripts/python -m pytest tests/ -k "causality or manual_matches_sdpa or layernorm_matches_pytorch or repeated_batch or identical_to_uncached or rope_config_is_refused" -v
@@ -97,6 +97,14 @@ Trains a model in front of you. ~25 seconds. Loss falls 10.93 → 0.003 and the 
 ```
 Generation. The same prompt under five sampling strategies side by side, what top-k and top-p
 actually leave behind, a cached-vs-uncached parity check, and the cache timed against recomputing.
+
+```bash
+.venv/Scripts/python scripts/chat.py
+```
+**Talk to the model you trained.** Type the start of a story and watch it continue, streamed word
+by word. `/think on` shows what it was weighing at each word: the alternatives it considered, the
+probability it gave each, and the points where it was genuinely torn. `/temp 0` makes it always
+take the likeliest word. Needs a trained checkpoint.
 
 ---
 

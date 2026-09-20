@@ -7,6 +7,8 @@ prose. See notes/06_generation.md.
 from __future__ import annotations
 
 import torch
+from collections.abc import Iterator
+
 from torch import Tensor
 
 from llm.kv_cache import KVCache
@@ -86,6 +88,35 @@ def generate(
 ) -> Tensor:
     """Autoregressive generation. `temperature=0` means greedy.
 
+    The whole sequence at once. `iter_generate` is the same loop yielding a token at a time, for
+    printing as it goes or inspecting what the model was weighing.
+    """
+    for next_id, _ in iter_generate(
+        model, idx, max_new_tokens,
+        temperature=temperature, top_k=top_k, top_p=top_p,
+        eos_id=eos_id, use_cache=use_cache, seed=seed,
+    ):
+        idx = torch.cat([idx, next_id], dim=1)
+    return idx
+
+
+@torch.no_grad()
+def iter_generate(
+    model: GPTModel,
+    idx: Tensor,
+    max_new_tokens: int,
+    *,
+    temperature: float = 1.0,
+    top_k: int | None = None,
+    top_p: float | None = None,
+    eos_id: int | None = None,
+    use_cache: bool = True,
+    seed: int | None = None,
+) -> Iterator[tuple[Tensor, Tensor]]:
+    """Yield `(next_id, logits)` for each step, where `logits` are the raw scores that choice was
+    made from -- before temperature or any filtering, so they show what the model actually
+    believed rather than what the sampler was allowed to pick.
+
     With `use_cache`, the prompt is processed once and every later step feeds a single token.
     Without it, the whole (cropped) sequence is re-run each step. Both must produce identical
     output for the same seed -- that is a test, because caching bugs are fluent and subtly wrong.
@@ -126,12 +157,12 @@ def generate(
                 finished |= next_id.squeeze(1) == eos_id
 
             idx = torch.cat([idx, next_id], dim=1)
+            yield next_id, logits
             # With a cache the model has already seen everything before this token.
             step_input = next_id if cache is not None else idx[:, -model.cfg.context_length :]
 
             if eos_id is not None and bool(finished.all()):
                 break
-        return idx
     finally:
         model.train(was_training)
 
