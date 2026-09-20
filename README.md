@@ -26,15 +26,33 @@ Nothing gets coded until its note is read.
 
 ### Beyond the notes
 
+Four models, in the order they were built.
+
 | | Result |
 |---|---|
-| TinyStories model, trained here | validation loss **1.3935** (perplexity 4.03) on 328M tokens |
-| GPT-2 124M, instruction-tuned here | answers questions; validation loss **2.0695** |
+| TinyStories, v1 architecture, trained here | validation loss **1.3935** (perplexity 4.03) on 328M tokens |
+| TinyStories, **v2** architecture (RoPE + RMSNorm + SwiGLU + GQA) | validation loss **1.3864** — 0.5% better on 10% fewer parameters, in 45 min against 70 |
+| GPT-2 124M, instruction-tuned here | answers questions, badly; validation loss **2.0695** |
+| Qwen3-1.7B-Base, chat fine-tuned here | multi-turn conversation — see below |
 
 ```bash
+.venv/Scripts/python scripts/talk.py                                    # the chat model
 .venv/Scripts/python scripts/chat.py                                    # the story model
-.venv/Scripts/python scripts/chat.py --checkpoint checkpoints/gpt2-instruct/final.pt --tokenizer gpt2 --instruct
+.venv/Scripts/python scripts/demo_07.py                                 # v1 vs v2, side by side
 ```
+
+**Why the fourth model exists.** The instruction-tuned GPT-2 answered *"what sup"* with *"The sup
+instruction is a greeting."* Three causes, and only one of them was about training: 124M
+parameters is too small to know much, Alpaca is single-turn *tasks* rather than conversation, and
+the chat script sent one message at a time with no history. The fix was a modern base model,
+multi-turn data, and ChatML — see [ROADMAP v3](docs/ROADMAP.md).
+
+That is also the sharpest thing this project taught. The architecture is not the hard part:
+`MODERN` is essentially Qwen3's transformer block, written from scratch over a weekend, and it
+beat the 2019 design on the first try. What a laptop cannot produce is *pretraining compute*.
+This machine sustains about 12.5 TFLOPS; a frontier pretraining run is on the order of 1e25
+FLOPs, which is roughly **25,000 years** of it. Fine-tuning moves style, format and manner. It
+does not move knowledge.
 
 Design document: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the shapes, the module map,
 the config system, and the reasoning behind each choice.

@@ -121,6 +121,51 @@ def oasst_conversations(ds, limit: int) -> list[dict]:
 
 
 @torch.no_grad()
+def init_chat_tokens(model, tok) -> dict[str, float]:
+    """Give the ChatML markers a usable starting point in the embedding table.
+
+    Qwen3-1.7B-**Base** was pretrained without ever seeing ChatML. Its rows for `<|im_start|>`
+    and `<|im_end|>` have norm 0.3748 -- exactly the value of the *unused* tail of the vocabulary,
+    so they are reserved placeholders holding noise, not learned vectors. `<|endoftext|>`, which
+    was trained, sits at 1.88.
+
+    That single row is both how the model reads a marker and how it writes one, because Qwen3
+    ties its embeddings. Left alone, and with LoRA targeting only the attention and MLP
+    projections, **no parameter in the run can raise the probability of `<|im_end|>`** -- so the
+    model produces a correct answer and then cannot stop, emitting whatever noise sits nearby.
+    Training longer does not help; there is nothing to train.
+
+    `<|im_end|>` is seeded from `<|endoftext|>`, which already means "stop here". `<|im_start|>`
+    has no natural donor, so it gets the mean of the trained rows -- the standard choice for a
+    new token, putting it in a typical position rather than a random one.
+
+    Deterministic, so inference can reproduce it exactly; `scripts/talk.py` calls this too.
+    """
+    emb = model.get_input_embeddings().weight
+    # Only the rows the tokenizer actually uses; the table is padded out past that for alignment.
+    known = emb[: len(tok)]
+    norms = known.norm(dim=-1)
+    typical = norms.median()
+    # Mean direction of the trained rows, rescaled to a typical length. The rescale is not
+    # cosmetic: averaging many rows shrinks the result toward zero, and a vector an order of
+    # magnitude shorter than its neighbours is barely distinguishable from the noise it replaced.
+    reference = known[norms > typical * 0.5].mean(0)
+    reference = reference / reference.norm().clamp_min(1e-6) * typical
+
+    out = {}
+    for name, donor in (("<|im_end|>", "<|endoftext|>"), ("<|im_start|>", None)):
+        i = tok.convert_tokens_to_ids(name)
+        before = emb[i].norm().item()
+        if before > typical * 0.5:
+            out[name] = before                              # already trained; leave it alone
+            continue
+        source = emb[tok.convert_tokens_to_ids(donor)] if donor else reference
+        emb[i] = source.clone()
+        out[name] = emb[i].norm().item()
+    return out
+
+
+@torch.no_grad()
 def sample(model, tok, messages, max_new_tokens: int = 64) -> str:
     """One greedy continuation, for watching behaviour change during training."""
     was_training = model.training
@@ -203,6 +248,8 @@ def main() -> None:
     print(f"dropped     {train_data.dropped + val_data.dropped:,} unusable rows")
 
     model = AutoModelForCausalLM.from_pretrained(args.base, dtype=torch.bfloat16).to(device)
+    seeded = init_chat_tokens(model, tok)
+    print("chatml      " + "  ".join(f"{k} norm {v:.3f}" for k, v in seeded.items()))
     model.config.use_cache = False          # incompatible with gradient checkpointing
     if not args.no_grad_checkpointing:
         # Trades compute for memory: activations are thrown away on the forward pass and
@@ -216,8 +263,11 @@ def main() -> None:
         task_type="CAUSAL_LM",
         # Every linear layer, attention and MLP alike. Attention-only LoRA is cheaper and
         # noticeably worse at absorbing a new response style.
+        # lm_head is in the list on purpose. Without it nothing can move the output
+        # distribution over the ChatML markers, and the model never learns to stop -- see
+        # init_chat_tokens. It costs 2048x32 + 32x151936 = 4.9M extra parameters.
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
+                        "gate_proj", "up_proj", "down_proj", "lm_head"],
     )
     model = get_peft_model(model, lora)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)

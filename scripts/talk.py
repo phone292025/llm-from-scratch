@@ -21,6 +21,7 @@ from pathlib import Path
 import torch
 
 from llm.chat_data import DEFAULT_SYSTEM, IM_END, render
+from llm.chat_sft import init_chat_tokens
 from llm.console import use_utf8
 
 GREY, BLUE, BOLD, OFF = "\033[90m", "\033[94m", "\033[1m", "\033[0m"
@@ -62,6 +63,10 @@ def load(args):
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(base, dtype=torch.bfloat16)
+    # Identical to training, and required: the base model's ChatML rows are untrained noise, and
+    # the adapter was learned on top of this seeding. Skipping it here would silently change the
+    # model the adapter was fitted to.
+    init_chat_tokens(model, tok)
 
     if adapter and adapter.exists() and not args.no_adapter:
         from peft import PeftModel
