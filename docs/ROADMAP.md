@@ -82,6 +82,30 @@ A base model completes text; it does not answer. Turning one into an assistant:
 
 **Done when:** the model answers a question it was never trained on, in a sensible format.
 
+### What v3 actually took, and the thing it taught
+
+The first attempt did all of the above on GPT-2 124M with Alpaca, and produced a model that
+answered "what sup" with *"The sup instruction is a greeting."* and, asked who the user was,
+claimed not to be a member of the Order of the Phoenix. Validation loss fell the whole time.
+
+Three causes, and only one of them was about training:
+
+| cause | fix |
+|---|---|
+| 124M parameters, ~8B pretraining tokens, 2019 | a modern base: Qwen3-1.7B-Base, ~36T tokens |
+| Alpaca is 52k single-turn *tasks*, not conversation | multi-turn dialogue data |
+| the chat script sent one message at a time | ChatML with the full history in context |
+
+**The lesson is about where capability comes from.** Notes 1-7 build the architecture, and the
+architecture is not the hard part -- `MODERN` is essentially Qwen3's block, written from scratch
+in a weekend. What a laptop cannot produce is *pretraining compute*. This machine sustains about
+12.5 TFLOPS; a frontier pretraining run is on the order of 1e25 FLOPs, which is roughly 25,000
+years of it. Fine-tuning moves style, format and manner. It does not move knowledge or reasoning,
+because those were bought with electricity somebody else spent.
+
+So v3 takes a pretrained base and does the part that *is* in reach. `src/llm/chat_sft.py` is the
+one module in this project that uses somebody else's model code, and that file says why.
+
 ---
 
 ## Deliberately not doing

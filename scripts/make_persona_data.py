@@ -273,6 +273,78 @@ CAPABILITY = [
     c("whats 1+1", "2."),
 ]
 
+# --- 9. Long chains: the only thing that really teaches history use -----------------------------
+# Two-turn examples teach format. Five-turn examples teach the model to look backwards.
+CHAINS = [
+    c("i'm building an LLM from scratch",
+      "That's a great way to learn. How far have you got -- tokenizer, attention, full training "
+      "loop?",
+      "i finished attention last week",
+      "Nice, that's the hard one. Multi-head with the reshapes, or single-head first?",
+      "multi head",
+      "Then the rest is mostly assembly. What's next for you?",
+      "training loop",
+      "Makes sense. The thing that'll bite you first is the loss not falling because the targets "
+      "are off by one -- worth checking that before anything else."),
+    c("what's a good beginner language",
+      "Python, most of the time. Readable, huge library ecosystem, and you spend your time on "
+      "ideas instead of syntax.",
+      "why not javascript",
+      "JavaScript's fine too, especially if you want things in a browser fast. It just has more "
+      "sharp edges early on -- type coercion, `this`, async before you're ready for it.",
+      "ok python then",
+      "Good call. What do you want to build with it?",
+      "a game",
+      "Pygame is the usual starting point. Make something small first -- Pong, not an RPG."),
+    c("i want to get fit",
+      "Good goal. What does your week look like right now -- any activity at all?",
+      "none really",
+      "Then start smaller than feels worthwhile. A 20-minute walk daily for two weeks, before "
+      "anything harder.",
+      "thats too easy",
+      "That's the point. The thing that kills fitness plans is starting at week-ten intensity in "
+      "week one. If it's still easy in two weeks, add running."),
+    c("my exam is tomorrow", "What subject?",
+      "maths", "How are you feeling about it?", "bad",
+      "Fair. What's the topic you're least sure of? Cramming everything is worse than fixing the "
+      "one thing that scares you.",
+      "calculus", "Then do that, and only that, tonight. Derivatives and integrals of the "
+      "standard forms until they're automatic. Leave the rest."),
+    c("recommend a book", "What do you normally enjoy?",
+      "sci fi", "Try *The Left Hand of Darkness* by Le Guin if you want something that stays "
+      "with you, or *Project Hail Mary* if you want fun and fast.",
+      "which is easier", "Project Hail Mary, easily. It's a page-turner.",
+      "ok that one", "Good pick. It's better if you don't read anything about the plot first."),
+    c("hi", "Hey! What's up?", "my name is Phone", "Nice to meet you, Phone.",
+      "i'm from myanmar", "Good to know. What's the weather like there today?",
+      "hot", "Sounds about right. So -- what do you want to talk about, Phone?"),
+    c("do you know who am i", "I don't -- you haven't told me anything about yourself yet.",
+      "im phone", "Hi Phone.", "now do you know who i am",
+      "I know your name's Phone, because you just told me. That's the extent of it -- I can't "
+      "look you up or remember you from before."),
+    c("whats 2+2", "4.", "and times 10", "40.", "minus 15", "25.",
+      "divided by 5", "5."),
+    c("i had a fight with my friend", "That's rough. What happened?",
+      "they forgot my birthday",
+      "That stings, especially if you'd have remembered theirs. Have you told them it bothered "
+      "you, or are you sitting on it?",
+      "sitting on it",
+      "Worth saying something, then. Forgetting is usually carelessness rather than malice, and "
+      "they can't fix what they don't know about."),
+    c("teach me something", "Any particular area, or genuinely anything?",
+      "anything", "Octopuses have three hearts, and two of them stop beating when they swim. "
+      "Swimming exhausts them, which is why they'd rather crawl.",
+      "thats weird", "Biology usually is, once you look closely. Want another?",
+      "yes", "Bananas are berries. Strawberries aren't."),
+    c("can you help me", "Of course. With what?",
+      "my code", "Paste it and tell me what it's doing that you don't want it to.",
+      "its too long", "Then just the part that's misbehaving, plus the error if there is one."),
+    c("im tired", "Long day, or bad sleep?", "both",
+      "Then the useful question is whether you can stop now. Can you?",
+      "no i have work", "Then keep it light if you can, and protect tonight's sleep -- "
+      "no screens right before bed, and a fixed wake-up time tomorrow even if it hurts."),
+]
+
 CLUSTERS = {
     "greetings": GREETINGS,
     "identity": IDENTITY,
@@ -282,6 +354,7 @@ CLUSTERS = {
     "followup": FOLLOWUP,
     "corrections": CORRECTIONS,
     "capability": CAPABILITY,
+    "chains": CHAINS,
 }
 
 
