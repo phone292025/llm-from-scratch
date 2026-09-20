@@ -114,8 +114,18 @@ def _infinite(loader: DataLoader):
 
 @torch.no_grad()
 def _sample(model: GPTModel, tok: BPETokenizer, prompt: str, n: int, device) -> str:
+    """A greedy continuation, for watching the model improve during a run.
+
+    Stops at the end-of-text token. Without that, an instruction-tuned model finishes its answer
+    and then keeps going into whatever it would have generated next, which makes the sample look
+    far worse than the model is.
+    """
+    from llm.generate import generate
+
     ids = torch.tensor([tok.encode(prompt)], device=device)
-    return tok.decode(model.generate_greedy(ids, max_new_tokens=n)[0].tolist())
+    out = generate(model, ids, n, temperature=0.0, eos_id=getattr(tok, "eot_id", None))
+    text = tok.decode(out[0].tolist())
+    return text.split("<|endoftext|>")[0] if "<|endoftext|>" in text else text
 
 
 def train(
@@ -166,6 +176,7 @@ def train(
     history: dict[str, list] = {"step": [], "train_loss": [], "val_step": [], "val_loss": [], "lr": []}
     batches = _infinite(train_loader)
     tokens_seen = 0
+    tokens_here = 0  # since this process started, for an honest throughput figure
     elapsed_before = 0.0
     start_step = 0
 
@@ -214,6 +225,7 @@ def train(
             (loss / tcfg.accum_steps).backward()
             accumulated += loss.detach() / tcfg.accum_steps
             tokens_seen += x.numel()
+            tokens_here += x.numel()
 
         # A single bad batch can otherwise produce an enormous gradient and destroy the weights
         # in one step. Costs nothing; always on.
@@ -240,14 +252,13 @@ def train(
         record(kind="train", step=step, loss=accumulated, lr=lr, tokens=tokens_seen)
 
         if verbose and tcfg.log_every and (step % tcfg.log_every == 0 or step == tcfg.max_steps - 1):
-            # Throughput since this process started, so a resume does not dilute it with the
-            # tokens a previous process saw.
+            # Counted, not inferred from batch_size x width: with variable-length batches the
+            # width changes every step, so multiplying by the last one is meaningless. Measured
+            # since this process started, so a resume does not dilute it.
             run = time.perf_counter() - start
-            done_here = (step - start_step + 1) * tcfg.batch_size * tcfg.accum_steps
-            done_here *= x.shape[1]
             print(
                 f"  step {step:>5}  loss {accumulated:7.4f}  ppl {math.exp(min(accumulated, 20)):>9,.1f}"
-                f"  lr {lr:.2e}  {done_here / max(run, 1e-9):>8,.0f} tok/s"
+                f"  lr {lr:.2e}  {tokens_here / max(run, 1e-9):>8,.0f} tok/s"
             )
 
         is_last = step == tcfg.max_steps - 1

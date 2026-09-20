@@ -21,6 +21,7 @@ from llm.bpe import Tokenizer
 from llm.checkpoint import load, load_config
 from llm.console import use_utf8
 from llm.generate import iter_generate
+from llm.instruct import build_prompt
 from llm.model import GPTModel
 
 DEFAULT_CKPT = "checkpoints/tinystories-full/final.pt"
@@ -45,15 +46,23 @@ HELP = f"""
 
 
 class Chat:
-    def __init__(self, model: GPTModel, tok: Tokenizer, device: str) -> None:
+    def __init__(self, model: GPTModel, tok: Tokenizer, device: str, instruct: bool = False) -> None:
         self.model, self.tok, self.device = model, tok, device
         self.temperature, self.top_p, self.top_k = 0.8, 0.9, 0
-        self.max_new, self.seed, self.think, self.keep = 120, None, False, True
+        self.max_new, self.seed, self.think = 120, None, False
+        self.instruct = instruct
+        # An instruction-tuned model answers one request at a time in a fixed layout; carrying the
+        # previous answer forward would put text where the template expects the next instruction.
+        self.keep = not instruct
         self.history: list[int] = []
 
     # -- generation ---------------------------------------------------------------------------
 
     def respond(self, prompt: str) -> None:
+        if self.instruct:
+            # The model was trained to answer only after this exact layout. Typing the bare
+            # question instead leaves it continuing text, which is what a base model does.
+            prompt = build_prompt(prompt)
         ids = self.history + self.tok.encode(prompt) if self.keep else self.tok.encode(prompt)
         if not ids:
             ids = [self.tok.eot_id]
@@ -181,6 +190,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Talk to a model you trained.")
     p.add_argument("--checkpoint", default=DEFAULT_CKPT)
     p.add_argument("--tokenizer", default=DEFAULT_TOK)
+    p.add_argument("--instruct", action="store_true",
+                   help="the checkpoint was instruction-tuned: wrap input in the training layout")
     p.add_argument("--cpu", action="store_true")
     args = p.parse_args()
 
@@ -192,7 +203,12 @@ def main() -> None:
     model = GPTModel(cfg)
     load(args.checkpoint, model, map_location=device)
     model.to(device).eval()
-    tok = Tokenizer.load(args.tokenizer)
+    if args.tokenizer in ("gpt2", "gpt-2"):
+        from llm.tokenizer import BPETokenizer
+
+        tok = BPETokenizer()
+    else:
+        tok = Tokenizer.load(args.tokenizer)
     if tok.vocab_size != cfg.vocab_size:
         raise SystemExit(
             f"tokenizer has {tok.vocab_size:,} tokens, model expects {cfg.vocab_size:,}"
@@ -200,11 +216,15 @@ def main() -> None:
 
     print(f"{BOLD}Your model{RESET}  {model.num_parameters():,} parameters, "
           f"{cfg.vocab_size:,}-token vocabulary, {cfg.context_length}-token memory, on {device}")
-    print(f"{DIM}It continues text; it does not answer questions. Give it the start of a story.")
-    print(f"Try: Once upon a time    or    Tom found a key in the garden")
+    if args.instruct:
+        print(f"{DIM}Instruction-tuned: ask it something and it will try to answer.")
+        print(f"Try: Give three tips for staying healthy    or    Explain gravity to a child")
+    else:
+        print(f"{DIM}It continues text; it does not answer questions. Give it the start of a story.")
+        print(f"Try: Once upon a time    or    Tom found a key in the garden")
     print(f"/help for commands, /think on to see what it is weighing, /quit to leave.{RESET}")
 
-    chat = Chat(model, tok, device)
+    chat = Chat(model, tok, device, instruct=args.instruct)
     while True:
         try:
             line = input(f"\n{BOLD}you ›{RESET} ").strip()
