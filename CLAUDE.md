@@ -28,7 +28,7 @@ without opening the diff.
 The module or area touched, matching `src/llm/`:
 
 `tokenizer` `data` `config` `attention` `norms` `ffn` `rope` `block` `model` `generate` `kv-cache`
-`train` `optim` `checkpoint` `gpt2-weights`
+`train` `optim` `checkpoint` `gpt2-weights` `chat`
 
 Plus: `notes` (the learning notes), `docs` (design docs), `env` (venv, deps, CI).
 

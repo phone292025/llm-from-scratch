@@ -2,7 +2,13 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-data/
+# The corpus, checkpoints and downloads stay out. The hand-written chat data is authored
+# content, so it is kept -- git cannot re-include a file under an excluded directory,
+# hence data/* rather than data/.
+data/*
+!data/chat/
+data/chat/*
+!data/chat/*.jsonl
 checkpoints/
 runs/
 *.pdf
