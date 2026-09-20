@@ -23,7 +23,10 @@ model bigger and the comparison meaningless. The hidden dimension has to shrink 
 
 **Correction, found while writing the tests.** An earlier version of this note claimed `MODERN`
 and `SMALL` land within 1% of each other. They do not: `MODERN` is **4.8% smaller**, and almost
-all of that is GQA, which removes 12 of 16 KV heads in every layer. RoPE (−0.3%, the position
+all of that is GQA, which removes 12 of 16 KV heads in every layer. At the TinyStories
+vocabulary the same gap reads **10.3%** (17.84 M -> 16.00 M): the savings are all in the
+blocks, and a 10k embedding table no longer dilutes them. Same architecture, very different
+number, which is worth knowing before reading the A/B. RoPE (−0.3%, the position
 table), RMSNorm (−0.01%, one bias per norm) and SwiGLU (−0.3%, rounding the 8d/3 width to a
 multiple of 64) are near-neutral as intended; GQA is not, and was never meant to be — §4 describes
 it as a memory trade. The honest framing is that the first three runs are equal-parameter
