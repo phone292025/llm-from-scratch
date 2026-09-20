@@ -177,6 +177,8 @@ def main() -> None:
     p.add_argument("--sample-every", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--no-grad-checkpointing", action="store_true",
+                   help="faster, more memory: recomputing activations costs ~30% of throughput")
     args = p.parse_args()
 
     out = Path(args.out)
@@ -202,8 +204,12 @@ def main() -> None:
 
     model = AutoModelForCausalLM.from_pretrained(args.base, dtype=torch.bfloat16).to(device)
     model.config.use_cache = False          # incompatible with gradient checkpointing
-    model.gradient_checkpointing_enable()
-    model.enable_input_require_grads()      # else checkpointing sees no grad-requiring input
+    if not args.no_grad_checkpointing:
+        # Trades compute for memory: activations are thrown away on the forward pass and
+        # recomputed during the backward. Roughly 30% slower, and the difference between
+        # fitting in 8GB and not.
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()  # else checkpointing sees no grad-requiring input
 
     lora = LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.05, bias="none",
