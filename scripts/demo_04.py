@@ -50,16 +50,15 @@ def main() -> None:
 
     # 2 -------------------------------------------------------------------------------------
     rule("2. Preset shapes")
-    print(f"  {'preset':<12} {'params':>13} {'non-emb':>12} {'emb %':>6} {'d/L':>5}")
-    # Counted from the config rather than by building each model: `modern` asks for RoPE, which
-    # has no implementation until note 7, so GPTModel refuses to build it. The numbers are the
-    # same either way -- a test pins n_params() to num_parameters() for every buildable preset.
+    print(f"  {'preset':<19} {'params':>13} {'non-emb':>12} {'emb %':>6} {'d/L':>5}")
+    # Counted from the config rather than by building each model -- a test pins n_params() to
+    # num_parameters() for every preset, so the arithmetic is known to agree.
     for name, cfg in PRESETS.items():
         emb = cfg.vocab_size * cfg.emb_dim
         total = cfg.n_params()
-        note = "  <- not buildable until note 7" if cfg.pos == "rope" else ""
+        note = "  <- v2 architecture" if cfg.pos == "rope" else ""
         print(
-            f"  {name:<12} {total:>13,} {total - emb:>12,} "
+            f"  {name:<19} {total:>13,} {total - emb:>12,} "
             f"{emb / total:>6.0%} {cfg.emb_dim / cfg.n_layers:>5.0f}{note}"
         )
     print("\n  d/L is the aspect ratio; production models cluster in 100-200 (CS336 lecture 3).")

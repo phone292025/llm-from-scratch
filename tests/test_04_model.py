@@ -86,29 +86,28 @@ def test_eval_mode_is_deterministic(cfg: ModelConfig, idx: torch.Tensor) -> None
         assert torch.equal(m(idx), m(idx))
 
 
-#: Presets whose positional scheme has an implementation behind it. `modern` asks for RoPE,
-#: which arrives in note 7, so it is excluded here and covered by the guard test below.
-BUILDABLE = [name for name, cfg in PRESETS.items() if cfg.pos != "rope"]
-
-
-@pytest.mark.parametrize("preset", BUILDABLE)
+@pytest.mark.parametrize("preset", list(PRESETS))
 def test_every_preset_builds_and_runs(preset: str) -> None:
     cfg = replace(PRESETS[preset], n_layers=2, context_length=32)
     ids = torch.randint(0, cfg.vocab_size, (1, 8))
     assert GPTModel(cfg)(ids).shape == (1, 8, cfg.vocab_size)
 
 
-def test_rope_config_is_refused_rather_than_silently_ignored() -> None:
-    """The most expensive bug this repo could ship.
+def test_rope_carries_real_position_information() -> None:
+    """The most expensive bug this repo could ship, now guarded from the other side.
 
-    There is no rope.py yet, so `pos="rope"` used to build a model byte-identical to one with no
-    positional information at all: attention is a set operation, order is invisible, and the run
-    still trains, still logs a falling loss and still emits text. Nothing downstream can detect
-    it. Building has to fail.
+    Until note 7 there was no rope.py, so `pos="rope"` would have built a model with no
+    positional information at all -- one that still trains, still logs a falling loss and still
+    emits text, with nothing downstream able to detect it. `GPTModel` raised rather than build
+    it. Now it builds, so the guard becomes a behavioural check: the output has to depend on
+    order. The detailed version lives in tests/test_07_rope.py.
     """
-    cfg = replace(PRESETS["modern"], n_layers=2, context_length=32)
-    with pytest.raises(NotImplementedError, match="note 7"):
-        GPTModel(cfg)
+    cfg = replace(PRESETS["modern"], n_layers=2, context_length=32, dropout=0.0)
+    torch.manual_seed(0)
+    model = GPTModel(cfg).eval()
+    ids = torch.randint(0, cfg.vocab_size, (1, 8))
+    with torch.no_grad():
+        assert not torch.allclose(model(ids)[0, -1], model(ids.flip(1))[0, -1], atol=1e-4)
 
 
 def test_position_blindness_is_detectable_when_asked_for_explicitly() -> None:
@@ -147,7 +146,7 @@ def test_gpt2_parameter_count_is_exact() -> None:
     assert GPTModel(replace(GPT2_124M, tie_weights=False)).num_parameters() == 163_037_184
 
 
-@pytest.mark.parametrize("preset", BUILDABLE)
+@pytest.mark.parametrize("preset", list(PRESETS))
 def test_parameter_count_matches_config_prediction(preset: str) -> None:
     # config.n_params() is used for planning before a model is built, so it must agree.
     cfg = replace(PRESETS[preset], n_layers=2)

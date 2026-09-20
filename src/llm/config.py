@@ -171,15 +171,20 @@ SMALL = ModelConfig(
 TINYSTORIES = replace(SMALL, vocab_size=10_000)
 
 #: v2: the same shape as SMALL, with the modern components. See notes/07_modern_upgrades.md.
-#: **Not yet trainable**: `pos="rope"` has no implementation behind it until note 7, and
-#: `GPTModel` refuses to build it rather than quietly producing a model with no sense of order.
+#: RMSNorm, RoPE, SwiGLU and 4 KV heads -- roughly Llama's block, at SMALL's size, so the two
+#: can be trained on identical data and compared. `ffn_hidden_dim` compensates for SwiGLU's
+#: third matrix, keeping the parameter counts within a percent of each other.
 MODERN = replace(SMALL, norm="rmsnorm", pos="rope", act="swiglu", n_kv_heads=4)
+
+#: MODERN at the TinyStories vocabulary: the A/B partner for TINYSTORIES.
+MODERN_TINYSTORIES = replace(MODERN, vocab_size=10_000)
 
 PRESETS: dict[str, ModelConfig] = {
     "gpt2": GPT2_124M,
     "small": SMALL,
     "tinystories": TINYSTORIES,
     "modern": MODERN,
+    "modern-tinystories": MODERN_TINYSTORIES,
 }
 
 

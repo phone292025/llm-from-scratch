@@ -16,6 +16,7 @@ from torch import Tensor, nn
 from llm.block import TransformerBlock
 from llm.config import ModelConfig
 from llm.norms import make_norm
+from llm.rope import RopeCache
 
 
 class GPTModel(nn.Module):
@@ -28,24 +29,19 @@ class GPTModel(nn.Module):
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
-        if cfg.pos == "rope":
-            # There is no rope.py yet. Building anyway would hand back a model whose output is
-            # bit-identical to pos="none": attention would be a set operation, the model would
-            # have no idea what order its tokens came in, and it would still train, log a
-            # falling loss and generate text. Nothing downstream can detect that, so it has to
-            # be refused here.
-            raise NotImplementedError(
-                "pos='rope' has no implementation yet -- rotary embeddings arrive in note 7 "
-                "(notes/07_modern_upgrades.md). Building this config now would silently give a "
-                "model with no positional information at all. Use pos='learned', or pos='none' "
-                "if a position-blind ablation is what you meant."
-            )
         self.cfg = cfg
 
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.emb_dim)
-        # RoPE (note 7) will be applied inside attention instead, so there is no table for it.
+        # Exactly one of these is active. RoPE has no embedding table -- it is applied inside
+        # attention, to q and k only -- so the cos/sin cache stands in for pos_emb and holds no
+        # parameters at all.
         self.pos_emb = (
             nn.Embedding(cfg.context_length, cfg.emb_dim) if cfg.pos == "learned" else None
+        )
+        self.rope = (
+            RopeCache(cfg.head_dim, cfg.context_length, cfg.rope_base)
+            if cfg.pos == "rope"
+            else None
         )
         self.drop = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList(TransformerBlock(cfg, i) for i in range(cfg.n_layers))
@@ -113,7 +109,7 @@ class GPTModel(nn.Module):
         h = self.drop(h)
 
         for block in self.blocks:
-            h = block(h, cache=cache)
+            h = block(h, rope=self.rope, cache=cache)
 
         # Once per forward, not once per layer - every layer wrote at the same position.
         if cache is not None:

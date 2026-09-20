@@ -21,7 +21,7 @@ Nothing gets coded until its note is read.
 | 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [x] **built, 37 tests pass** |
 | 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 30 tests pass** |
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 39 tests pass** |
-| 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [ ] — `MODERN` is declared but **refuses to build** until `rope.py` exists |
+| 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] `rope.py` — `MODERN` builds and trains |
 
 
 ### Beyond the notes
@@ -81,7 +81,7 @@ src/llm/
   attention.py   causal self-attention, MHA and GQA
   norms.py       LayerNorm, RMSNorm
   ffn.py         GELU MLP, SwiGLU MLP
-  rope.py        rotary position embeddings (note 7 - not written yet)
+  rope.py        rotary position embeddings
   block.py       one transformer block
   model.py       the stack: embeddings -> blocks -> logits
   generate.py    sampling loop (greedy, temperature, top-k, top-p), streamed or whole

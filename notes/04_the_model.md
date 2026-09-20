@@ -70,7 +70,7 @@ SMALL       = ModelConfig(emb_dim=512, n_layers=4, n_heads=16,
                           linear_bias=False)                 # what we train
 TINYSTORIES = replace(SMALL, vocab_size=10_000)              # corpus-sized vocabulary
 MODERN      = replace(SMALL, norm="rmsnorm", pos="rope",
-                      act="swiglu", n_kv_heads=4)            # v2 - note 7, not buildable yet
+                      act="swiglu", n_kv_heads=4)            # v2 - note 7
 ```
 
 `SMALL`'s aspect ratio (`emb_dim / n_layers` = 128) sits in the 100–200 band every production
@@ -79,10 +79,9 @@ model occupies, and bias terms are off as modern models do. That takes **both** 
 attention output projection and on both GELU MLP matrices — three tensors per block in a model
 documented as having none. See [CS336_FINDINGS.md](../docs/CS336_FINDINGS.md).
 
-`MODERN` names the v2 architecture but cannot be built until note 7 ships `rope.py`. Constructing
-it now would give a model with no positional information at all — identical to `pos="none"` — and
-it would train, log a falling loss and generate text while being blind to word order, so
-`GPTModel` refuses it.
+`MODERN` names the v2 architecture. Until note 7 shipped `rope.py`, `GPTModel` refused to build
+it: `pos="rope"` with no implementation behind it gives a model with no positional information at
+all, which trains, logs a falling loss and generates text while being blind to word order.
 
 `GPT2_124M` is for loading pretrained weights and doing inference. `SMALL` is what we actually
 train — see [ARCHITECTURE §6](../docs/ARCHITECTURE.md) for why chasing 124 M on a laptop is a trap.

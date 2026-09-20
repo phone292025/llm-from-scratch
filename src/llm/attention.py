@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from llm.config import SMALL, ModelConfig
+from llm.rope import apply_rope
 
 
 def causal_mask(seq_len: int, device=None) -> Tensor:
@@ -173,7 +174,7 @@ class CausalSelfAttention(nn.Module):
         )
 
     def forward(self, x: Tensor, rope=None, cache=None) -> Tensor:
-        """`rope` is unused in v1 -- note 7 fills it in.
+        """`rope`, when given, rotates q and k by position before the scores are formed.
 
         With a `cache`, only the new tokens are projected, and they attend over every key and
         value stored so far.
@@ -189,6 +190,14 @@ class CausalSelfAttention(nn.Module):
                 f"{self.cfg.context_length}"
             )
         q, k, v = self._project(x)
+
+        if rope is not None:
+            # Rotate by ABSOLUTE position, and do it before the cache write, so a cached key
+            # keeps the angle of the position it was written at. Rotating afterwards would
+            # re-rotate the whole history on every decode step and destroy it.
+            # v is deliberately left alone: position belongs in the comparison, not the content.
+            cos, sin = rope.slice(past, T)
+            q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
 
         if cache is not None:
             # Cache the *narrow* k and v, before the GQA expansion. Storing the expanded copies
@@ -246,10 +255,13 @@ class CausalSelfAttention(nn.Module):
         return cols > rows
 
     @torch.no_grad()
-    def attention_weights(self, x: Tensor) -> Tensor:
+    def attention_weights(self, x: Tensor, rope=None) -> Tensor:
         """The (B, H, T, T) weight matrix, for inspection. Always takes the manual path."""
         T = x.shape[1]
         q, k, _ = self._project(x)
+        if rope is not None:
+            cos, sin = rope.slice(0, T)
+            q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
         k, _ = self._expand_kv(k, k)
         scores = q @ k.transpose(-2, -1) / math.sqrt(self.head_dim)
         return torch.softmax(scores.masked_fill(self.mask[:T, :T], float("-inf")), dim=-1)

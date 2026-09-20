@@ -3,7 +3,8 @@
 Everything up to here is the 2019 design. This note replaces four of its components with what a
 2024-era model uses, one at a time, measuring each change against the baseline.
 
-**Produces:** `src/llm/rope.py`, plus `RMSNorm` and `SwiGLUFeedForward` becoming active
+**Produces:** `src/llm/rope.py` — and with it `MODERN` becomes buildable, activating RMSNorm,
+SwiGLU and GQA, which were written behind config flags in notes 2 and 3 and never exercised.
 
 ---
 
@@ -19,6 +20,15 @@ not a failure.
 
 Holding parameter count constant matters. SwiGLU adds a third matrix, so a naive swap makes the
 model bigger and the comparison meaningless. The hidden dimension has to shrink to compensate.
+
+**Correction, found while writing the tests.** An earlier version of this note claimed `MODERN`
+and `SMALL` land within 1% of each other. They do not: `MODERN` is **4.8% smaller**, and almost
+all of that is GQA, which removes 12 of 16 KV heads in every layer. RoPE (−0.3%, the position
+table), RMSNorm (−0.01%, one bias per norm) and SwiGLU (−0.3%, rounding the 8d/3 width to a
+multiple of 64) are near-neutral as intended; GQA is not, and was never meant to be — §4 describes
+it as a memory trade. The honest framing is that the first three runs are equal-parameter
+comparisons and the fourth is not, so a loss *tie* on the GQA run is a win. `test_only_gqa_changes_the_parameter_budget`
+pins each of the four savings to its closed form, so this cannot drift again.
 
 ```
 runs/
@@ -70,6 +80,23 @@ Consequences:
 
 Implementation: precompute `cos` and `sin` tables of shape `(max_len, head_dim/2)` once, cache
 them, index by position, apply before the score matmul. About 30 lines.
+
+**The one place it gets subtle: the KV cache.** Decoding feeds one token at a time, so inside
+attention `T == 1` on every step. Rotate that token by position 0 — the obvious thing, since it is
+the only token in the tensor — and the model believes every token it generates is the start of the
+sequence. It still writes fluent text, because the *cached* keys stay correctly rotated relative to
+one another. Two rules make it right: rotate by the cache's absolute offset, and rotate **before**
+writing to the cache, so each key keeps the angle of the position it was written at. Rotating
+afterwards would re-rotate the entire history on every step.
+
+**A claim this note used to make, which is false.** "Without positional information attention is a
+set operation, so the model cannot tell word order." True for *one* layer. With two, it is not:
+layer 1's output at position `j` summarizes the prefix `0..j`, so the length of that prefix is
+visible in the result, and layer 2 can read it. The causal mask is itself a positional signal —
+this is the "NoPE" result, that decoder-only models train without any position encoding, just less
+well. It matters here because it changes what a broken RoPE would look like: not a model that
+ignores order, but one with a weak implicit sense of it. Much harder to notice.
+`test_causal_masking_leaks_position_once_there_are_two_layers` measures it.
 
 **Expected result:** roughly neutral at short context, clearly better at long context, and one
 fewer parameter table. Take this one for the extrapolation, not the loss curve.
@@ -155,14 +182,23 @@ Not in the plan, but the natural next steps once `MODERN` is trained:
 
 ## Tests
 
+`tests/test_07_rope.py`, 44 tests.
+
 | Test | Catches |
 |---|---|
-| RoPE preserves vector norms (it is a rotation) | wrong sin/cos pairing |
-| `q_m · k_n` after RoPE depends only on `m − n` | the central property — if this fails, RoPE is not doing its job |
-| RoPE at position 0 is the identity | angle indexing off by one |
-| SwiGLU at the corrected hidden dim matches the GELU MLP's parameter count within 1% | an unfair comparison |
-| every combination of config flags builds and runs a forward pass | the config matrix |
-| `MODERN` and `SMALL` have parameter counts within 1% | the comparison being meaningful at all |
+| `the_score_depends_only_on_the_distance` | the central property — slide the window down the sequence and every score is unchanged. If this fails, RoPE is an expensive way of scrambling q and k |
+| `rope_actually_encodes_distance` | its counterpart: the identity matrix would pass the test above |
+| `rope_preserves_norms` | wrong sin/cos pairing — a rotation must not rescale |
+| `position_zero_is_the_identity` | angle indexing off by one |
+| `frequencies_span_fast_to_slow` | the geometric progression, checked against the closed form |
+| `cached_decoding_matches_uncached_under_rope` | the offset bug — fluent output, wrong model |
+| `chunked_prefill_matches_one_pass_under_rope` | the middle case: non-zero offset *and* `T > 1` |
+| `the_model_can_tell_word_order` | a positional scheme wired in but doing nothing |
+| `one_layer_without_positions_is_genuinely_order_blind` | the control that makes the line above mean something |
+| `causal_masking_leaks_position_once_there_are_two_layers` | the false claim corrected in §1 |
+| `every_combination_of_components_builds_and_learns` | 24 configs: forward pass *and* one backward, so every parameter that was created gets a gradient |
+| `only_gqa_changes_the_parameter_budget` | each of the four savings against its closed form, and the four against their sum |
+| `swiglu_pays_for_its_third_matrix` | an unfair FFN comparison (within 2% at d=512, not 1% — 8d/3 does not land on a multiple of 64) |
 
 ## Demo
 

@@ -145,7 +145,10 @@ def iter_generate(
         for _ in range(max_new_tokens):
             if cache is not None and cache.pos + step_input.shape[1] > model.cfg.context_length:
                 # The cache is full. Absolute position embeddings have no rows beyond this, so
-                # fall back to the uncached path, which crops. RoPE (note 7) removes this limit.
+                # fall back to the uncached path, which crops. RoPE has no rows to run out of --
+                # its table is merely built to context_length -- so for a rope model this is a
+                # choice, not a wall. Cropping stays the default because quality past the trained
+                # length degrades either way; extrapolating well needs more than a longer table.
                 cache, step_input = None, idx[:, -model.cfg.context_length :]
 
             logits = model(step_input, cache=cache)[:, -1, :]

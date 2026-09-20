@@ -38,7 +38,9 @@ Most of them are shape checks. These six are the ones that would catch a real di
 | `layernorm_matches_pytorch` | a normalization that is subtly wrong. Still trains; corrupts GPT-2 weight loading |
 | `loss_decreases_on_a_repeated_batch` | "can it learn at all" — if this fails nothing else matters |
 | `cached_generation_is_identical_to_uncached` | a KV cache that changes which keys a query sees. The output stays fluent and is quietly not what the model would have said |
-| `rope_config_is_refused_rather_than_silently_ignored` | an unimplemented positional scheme building a model that has no idea what order its tokens came in, and training happily anyway |
+| `the_score_depends_only_on_the_distance` | a RoPE that rotates q and k but does not make attention relative — the one property the whole scheme exists for |
+| `rope_carries_real_position_information` | a positional scheme wired in but doing nothing, giving a model that trains happily with no idea what order its tokens came in |
+| `cached_decoding_matches_uncached_under_rope` | rotating each decoded token by position 0 instead of its real position — still fluent, still wrong |
 
 ### The failure mode these are aimed at
 

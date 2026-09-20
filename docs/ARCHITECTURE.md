@@ -130,12 +130,19 @@ Three named presets:
 | `GPT2_124M` | 124 M | exactly the 2019 architecture | **loads real OpenAI weights** — the correctness oracle |
 | `SMALL` | 38 M | d=512, 4 layers, 16 heads, T=256, no bias | what we train |
 | `TINYSTORIES` | 18 M | SMALL with a 10k vocabulary | a corpus-sized vocabulary — see below |
-| `MODERN` | 37 M | SMALL + rmsnorm + rope + swiglu + GQA(4) | the v2 architecture — **note 7, not buildable yet** |
+| `MODERN` | 36.6 M | SMALL + rmsnorm + rope + swiglu + GQA(4) | the v2 architecture — note 7 |
 
-`MODERN` is a declaration of intent, not a runnable config. `rope.py` does not exist until note 7,
-and a model built with `pos="rope"` before then is bit-identical to one with `pos="none"`: it has
-no idea what order its tokens arrived in, and it still trains, still logs a falling loss and still
-emits text. `GPTModel.__init__` raises `NotImplementedError` rather than hand back such a model.
+`MODERN` is **4.8% smaller than `SMALL`**, and it is worth knowing where that went before reading
+any A/B result. RoPE hands back the position table (0.3%), RMSNorm drops a bias per norm
+(0.01%), SwiGLU's narrower hidden dim slightly overshoots its own correction (0.3%) — and GQA
+removes 12 of 16 KV heads in every layer (4.1%). The first three are near-neutral by design; GQA
+is a deliberate trade of parameters for a KV cache a quarter of the size. So a loss tie between
+the two is a win for `MODERN`, not a draw.
+
+Until note 7, `pos="rope"` had nothing behind it, and building it would have given a model
+bit-identical to `pos="none"` — training happily, logging a falling loss, emitting text, blind to
+word order. `GPTModel.__init__` raised rather than hand one back. That guard is now a behavioural
+test instead (`test_rope_carries_real_position_information`).
 
 `SMALL`'s shape is not arbitrary. Its **aspect ratio** — `emb_dim / n_layers` — is 128, inside the
 100–200 band that essentially every production model occupies (BLOOM 205, PaLM 156, GPT-3 128,
@@ -169,7 +176,7 @@ config.py     (no imports - pure data)
     |
     +--> tokenizer.py ----> dataset.py
     |
-    +--> norms.py   ffn.py   rope.py (note 7)
+    +--> norms.py   ffn.py   rope.py
     |         \       |       /
     |          +--> attention.py
     |                   |
@@ -193,7 +200,7 @@ config.py     (no imports - pure data)
 | `dataset.py` | sliding window, train/val split | tokenization |
 | `norms.py` | LayerNorm, RMSNorm | where norms are placed (that is `block.py`) |
 | `ffn.py` | GELU MLP, SwiGLU MLP | residuals |
-| `rope.py` *(note 7)* | rotary angle tables, `apply_rope` | attention math |
+| `rope.py` | rotary angle tables, `apply_rope` | attention math |
 | `attention.py` | Q/K/V, causal mask, heads, GQA | the positional scheme (it asks `rope.py`) |
 | `block.py` | pre-norm ordering, the two residuals | what the sublayers are |
 | `model.py` | embeddings, block stack, head, weight tying | how to sample or train |
@@ -280,7 +287,7 @@ Three mitigations, present from day one rather than bolted on later:
 |---|---|---|
 | Norm placement | **pre-norm**, `h + attn(norm(h))` | post-norm is the 2017 original and needs careful warmup to converge at all; pre-norm leaves a clean gradient path straight through every residual. Every modern model is pre-norm |
 | Attention impl | manual **and** SDPA | manual for reading and for tests; SDPA for running |
-| Positions | learned now, RoPE in note 7 | learned is three lines and makes the concept obvious, and it is required for GPT-2 weight compatibility. RoPE then arrives as a measurable upgrade |
+| Positions | learned in v1, RoPE in v2 | learned is three lines and makes the concept obvious, and it is required for GPT-2 weight compatibility. RoPE then arrives as a measurable upgrade |
 | QKV bias | on for GPT-2, off elsewhere | GPT-2 has it; later work found it contributes nothing. A config flag, not a rewrite |
 | Weight tying | on | saves 24% of parameters, and is conceptually right |
 | Dropout | **0.0** | the book uses 0.1. Dropout fights overfitting — it is for small data and many epochs. Pretraining makes roughly one pass over a large corpus, so there is nothing to overfit and dropout only slows learning. Keep the knob, leave it off |
