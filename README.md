@@ -23,6 +23,19 @@ Nothing gets coded until its note is read.
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 39 tests pass** |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [ ] — `MODERN` is declared but **refuses to build** until `rope.py` exists |
 
+
+### Beyond the notes
+
+| | Result |
+|---|---|
+| TinyStories model, trained here | validation loss **1.3935** (perplexity 4.03) on 328M tokens |
+| GPT-2 124M, instruction-tuned here | answers questions; validation loss **2.0695** |
+
+```bash
+.venv/Scripts/python scripts/chat.py                                    # the story model
+.venv/Scripts/python scripts/chat.py --checkpoint checkpoints/gpt2-instruct/final.pt --tokenizer gpt2 --instruct
+```
+
 Design document: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the shapes, the module map,
 the config system, and the reasoning behind each choice.
 Roadmap: **[docs/ROADMAP.md](docs/ROADMAP.md)** — what v1, v2 and v3 mean.
