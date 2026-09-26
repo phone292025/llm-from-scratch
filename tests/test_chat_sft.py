@@ -25,11 +25,14 @@ from torch import nn
 from llm.chat_data import length_grouped_batches
 from llm.chat_infer import find_checkpoint
 from llm.chat_sft import (
+    DATA_RECIPE,
+    HELDOUT_PROMPTS,
     PROBE_PROMPTS,
     epoch_batches,
     init_chat_tokens,
     oasst_conversations,
     save_checkpoint,
+    split_records,
 )
 
 VOCAB, DIM = 64, 8
@@ -304,3 +307,99 @@ def test_the_original_layout_is_left_alone(tmp_path, opt) -> None:
     save_checkpoint(tmp_path, FakeAdapter(), opt, 300, "some/base")
     assert (tmp_path / "adapter" / "adapter_model.safetensors").exists()
     assert find_checkpoint(tmp_path) == tmp_path / "step-000300"
+
+
+# --- keeping validation honest ------------------------------------------------------------------
+
+
+def _conv(tag: str) -> dict:
+    return {"messages": [{"role": "user", "content": tag}, {"role": "assistant", "content": "ok"}]}
+
+
+@pytest.fixture
+def sources() -> tuple[list[dict], list[dict]]:
+    return [_conv(f"persona {i}") for i in range(20)], [_conv(f"external {i}") for i in range(500)]
+
+
+def _keys(records):
+    return [json.dumps(r["messages"], sort_keys=True) for r in records]
+
+
+def test_recipe_two_never_validates_on_training_data(sources) -> None:
+    """The flaw it replaces: repeating the hand-written set before splitting put copies on both
+    sides, and 22% of validation was conversations the model also trained on."""
+    persona, external = sources
+    train, val = split_records(persona, external, repeat=25, val_size=40, seed=0, recipe=2)
+    assert not set(_keys(val)) & set(_keys(train))
+    assert not set(_keys(val)) & set(_keys(persona)), "hand-written data belongs to training"
+    assert len(val) == 40
+
+
+def test_recipe_two_uses_every_conversation(sources) -> None:
+    persona, external = sources
+    train, val = split_records(persona, external, repeat=25, val_size=40, seed=0, recipe=2)
+    assert len(train) == 25 * len(persona) + len(external) - 40
+    assert sorted(set(_keys(train)) | set(_keys(val))) == sorted(set(_keys(persona + external)))
+
+
+def test_recipe_one_is_kept_exactly_as_it_was(sources) -> None:
+    """A run started under recipe 1 must resume onto the same data, so its code path is frozen.
+    This is the original function, inline; the new one has to match it record for record."""
+    import random
+
+    persona, external = sources
+    records = persona * 25 + external
+    random.Random(0).shuffle(records)
+    n = min(40, len(records) // 10)
+    expected = records[n:], records[:n]
+    got = split_records(persona, external, repeat=25, val_size=40, seed=0, recipe=1)
+    assert _keys(got[0]) == _keys(expected[0]) and _keys(got[1]) == _keys(expected[1])
+
+
+def test_recipe_one_really_did_leak(sources) -> None:
+    """Documents why recipe 2 exists. Recipe 1 must stay exactly as it was, leak included, so if
+    this ever fails, recipe 1 has been changed and old runs no longer resume onto their data."""
+    persona, external = sources
+    train, val = split_records(persona, external, repeat=25, val_size=40, seed=0, recipe=1)
+    assert set(_keys(val)) & set(_keys(train))
+
+
+def test_new_runs_use_the_leak_free_recipe() -> None:
+    assert DATA_RECIPE == 2
+
+
+def test_an_unknown_recipe_is_refused(sources) -> None:
+    with pytest.raises(ValueError, match="recipe"):
+        split_records(*sources, repeat=1, val_size=10, seed=0, recipe=9)
+
+
+def test_checkpoints_record_their_recipe(tmp_path, opt) -> None:
+    """Resume reads this to rebuild the right data. A checkpoint without it predates recipes and
+    is recipe 1."""
+    final = save_checkpoint(tmp_path, FakeAdapter(), opt, 100, "some/base", recipe=1)
+    assert json.loads((final / "state.json").read_text())["data_recipe"] == 1
+
+
+def test_heldout_probes_are_not_in_the_training_data() -> None:
+    """They exist to show whether a behaviour generalized. The moment one is copied into the
+    hand-written data it measures recall instead, like every original probe does."""
+    normal = lambda t: " ".join(t.lower().split())
+    trained = set()
+    path = pathlib.Path("data/chat/persona.jsonl")
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            trained |= {normal(m["content"]) for m in json.loads(line)["messages"]}
+    for convo in HELDOUT_PROMPTS:
+        for turn in convo:
+            if turn["role"] == "user":
+                assert normal(turn["content"]) not in trained, f"{turn['content']!r} is trained on"
+
+
+def test_heldout_probes_cover_what_the_seen_ones_do() -> None:
+    """Each behaviour probed from memory must also be probed fresh, or recall hides a gap."""
+    def asks(prompts, *words):
+        return any(all(w in p[-1]["content"].lower() for w in words) for p in prompts)
+
+    assert any(len(p) > 1 for p in HELDOUT_PROMPTS), "one must test memory across turns"
+    assert asks(HELDOUT_PROMPTS, "remember") or asks(HELDOUT_PROMPTS, "who")
+    assert asks(HELDOUT_PROMPTS, "name")

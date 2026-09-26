@@ -56,9 +56,54 @@ PROBE_PROMPTS = [
      {"role": "user", "content": "what's my name"}],
 ]
 
+#: The same behaviours, in words the model has never been trained on. Every probe above is copied
+#: verbatim from the hand-written data, which training repeats 25 times -- so a perfect answer to
+#: one of them shows recall, not that the behaviour generalized. These are the ones that can show
+#: the difference. A test keeps them out of the training data.
+HELDOUT_PROMPTS = [
+    [{"role": "user", "content": "hey there, how's it going?"}],
+    [{"role": "user", "content": "do u remember me from yesterday?"}],
+    [{"role": "user", "content": "are you a real person or a robot?"}],
+    [{"role": "user", "content": "I failed my exam today"}],
+    [{"role": "user", "content": "i'm Aung and i'm 22"},
+     {"role": "assistant", "content": "Nice to meet you, Aung."},
+     {"role": "user", "content": "how old am i, and what's my name?"}],
+    [{"role": "user", "content": "\u1019\u1004\u103a\u1039\u1002\u101c\u102c\u1015\u102b"}],
+]
 
-def load_sources(args, tok) -> tuple[list[dict], list[dict]]:
-    """Gather conversations from every source, then split off a validation set.
+#: How the conversations are split into training and validation. Stored with every checkpoint, so
+#: a resumed run rebuilds exactly the data it began with even after this changes.
+#:   1  repeat the hand-written set, then split. Copies land on both sides: 22% of validation was
+#:      conversations the model also trained on, so validation loss partly measured recall.
+#:   2  split first, validation from the external data only, then repeat the hand-written set
+#:      into training. Nothing in validation is ever trained on.
+DATA_RECIPE = 2
+
+
+def split_records(
+    persona: list[dict], external: list[dict], repeat: int, val_size: int, seed: int,
+    recipe: int = DATA_RECIPE,
+) -> tuple[list[dict], list[dict]]:
+    """Training and validation conversations, by the given recipe. Deterministic in `seed`."""
+    rng = random.Random(seed)
+    if recipe == 1:
+        # Kept exactly as it was, so runs started under it resume onto the same data.
+        records = persona * repeat + external
+        rng.shuffle(records)
+        n = min(val_size, len(records) // 10)
+        return records[n:], records[:n]
+    if recipe != 2:
+        raise ValueError(f"unknown data recipe {recipe}")
+    external = list(external)
+    rng.shuffle(external)
+    n = min(val_size, len(external) // 10)
+    train = persona * repeat + external[n:]
+    rng.shuffle(train)
+    return train, external[:n]
+
+
+def load_sources(args, tok, recipe: int = DATA_RECIPE) -> tuple[list[dict], list[dict]]:
+    """Gather conversations from every source, then split them by `recipe`.
 
     The persona file is tiny and aimed at known failures, so it is repeated: a few hundred good
     targeted examples shift behaviour more than another 50k generic ones, but only if the model
@@ -66,29 +111,26 @@ def load_sources(args, tok) -> tuple[list[dict], list[dict]]:
     """
     from datasets import load_dataset
 
-    records: list[dict] = []
+    persona: list[dict] = []
+    external: list[dict] = []
 
     if args.persona and Path(args.persona).exists():
         persona = [json.loads(line) for line in
                    Path(args.persona).read_text(encoding="utf-8").splitlines() if line.strip()]
-        records += persona * args.persona_repeat
         print(f"persona     {len(persona)} conversations x{args.persona_repeat} "
               f"= {len(persona) * args.persona_repeat}")
 
     if args.ultrachat:
         ds = load_dataset("HuggingFaceH4/ultrachat_200k", split=f"train_sft[:{args.ultrachat}]")
-        records += [{"messages": r["messages"]} for r in ds]
+        external += [{"messages": r["messages"]} for r in ds]
         print(f"ultrachat   {len(ds)} conversations")
 
     if args.oasst:
         ds = load_dataset("OpenAssistant/oasst2", split="train")
-        records += oasst_conversations(ds, args.oasst)
+        external += oasst_conversations(ds, args.oasst)
         print(f"oasst2      up to {args.oasst} conversations")
 
-    rng = random.Random(args.seed)
-    rng.shuffle(records)
-    val_size = min(args.val_size, len(records) // 10)
-    return records[val_size:], records[:val_size]
+    return split_records(persona, external, args.persona_repeat, args.val_size, args.seed, recipe)
 
 
 def oasst_conversations(ds, limit: int) -> list[dict]:
@@ -225,7 +267,7 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
 
 
 def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
-                    finished: bool = False) -> Path:
+                    finished: bool = False, recipe: int = DATA_RECIPE) -> Path:
     """Write a complete checkpoint into its own directory, then point `latest.json` at it.
 
     A save is 1.1 GB -- the adapter carries the 311M-entry embedding table because lm_head is a
@@ -248,7 +290,8 @@ def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
         rng["cuda"] = torch.cuda.get_rng_state_all()
     torch.save(rng, partial / "rng.pt")
     (partial / "state.json").write_text(
-        json.dumps({"step": step, "base": base, "finished": finished}), encoding="utf-8")
+        json.dumps({"step": step, "base": base, "finished": finished, "data_recipe": recipe}),
+        encoding="utf-8")
     if final.exists():
         shutil.rmtree(final)
     os.replace(partial, final)
@@ -277,6 +320,8 @@ def main() -> None:
     p.add_argument("--oasst", type=int, default=6000, help="conversations; 0 to skip")
     p.add_argument("--max-len", type=int, default=1024)
     p.add_argument("--val-size", type=int, default=400)
+    p.add_argument("--val-batches", type=int, default=100,
+                   help="validation conversations scored at each eval; 40 was too noisy to read")
     p.add_argument("--epochs", type=float, default=2.0)
     p.add_argument("--batch-size", type=int, default=2)
     p.add_argument("--accum", type=int, default=8)
@@ -303,7 +348,14 @@ def main() -> None:
         tok.pad_token = tok.eos_token
 
     print(f"base        {args.base}")
-    train_records, val_records = load_sources(args, tok)
+    # Found before the data is built: a resumed run must rebuild the data it started with.
+    found = find_checkpoint(out) if args.resume else None
+    recipe = DATA_RECIPE
+    if found is not None:
+        recipe = json.loads((found / "state.json").read_text(encoding="utf-8")).get("data_recipe", 1)
+    kept = " (kept from the run being resumed)" if recipe != DATA_RECIPE else ""
+    print(f"data        recipe {recipe}{kept}")
+    train_records, val_records = load_sources(args, tok, recipe)
 
     train_data = ChatDataset(train_records, tok, args.max_len)
     val_data = ChatDataset(val_records, tok, args.max_len)
@@ -359,7 +411,6 @@ def main() -> None:
         return args.lr * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(progress, 1.0))))
 
     start_step = 0
-    found = find_checkpoint(out) if args.resume else None
     if args.resume and found is None:
         print("resumed     nothing to resume in " + str(out) + " -- starting from step 0")
     if found is not None:
@@ -428,22 +479,25 @@ def main() -> None:
             metrics.flush()
 
         if args.eval_every and (step + 1) % args.eval_every == 0:
-            val = evaluate(model, val_batches, val_data, pad_id, device, limit=40)
+            val = evaluate(model, val_batches, val_data, pad_id, device, limit=args.val_batches)
             print(f"    val loss {val:.4f}   perplexity {math.exp(val):.2f}", flush=True)
             metrics.write(json.dumps({"kind": "eval", "step": step, "loss": val}) + "\n")
             metrics.flush()
 
         if args.sample_every and (step + 1) % args.sample_every == 0:
             model.config.use_cache = True
-            for messages in PROBE_PROMPTS:
-                print(f"    > {messages[-1]['content']}\n      {sample(model, tok, messages)}",
-                      flush=True)
+            for label, prompts in (("seen in training", PROBE_PROMPTS),
+                                   ("never seen", HELDOUT_PROMPTS)):
+                print(f"    -- {label} --")
+                for messages in prompts:
+                    print(f"    > {messages[-1]['content']}\n      {sample(model, tok, messages)}",
+                          flush=True)
             model.config.use_cache = False
 
         if args.save_every and (step + 1) % args.save_every == 0 and step + 1 < max_steps:
-            save_checkpoint(out, model, opt, step + 1, args.base)
+            save_checkpoint(out, model, opt, step + 1, args.base, recipe=recipe)
 
-    final = save_checkpoint(out, model, opt, max_steps, args.base, finished=True)
+    final = save_checkpoint(out, model, opt, max_steps, args.base, finished=True, recipe=recipe)
     print(f"\ndone in {(time.perf_counter() - t0) / 60:.1f} min -> {final / 'adapter'}")
     print("talk to it:  python scripts/talk.py")
     metrics.close()
