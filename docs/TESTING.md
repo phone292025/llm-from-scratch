@@ -41,6 +41,11 @@ Most of them are shape checks. These six are the ones that would catch a real di
 | `the_score_depends_only_on_the_distance` | a RoPE that rotates q and k but does not make attention relative — the one property the whole scheme exists for |
 | `rope_carries_real_position_information` | a positional scheme wired in but doing nothing, giving a model that trains happily with no idea what order its tokens came in |
 | `cached_decoding_matches_uncached_under_rope` | rotating each decoded token by position 0 instead of its real position — still fluent, still wrong |
+| `a_resumed_run_is_identical_to_one_that_never_stopped` | a resume that restarts the data stream instead of continuing it. Loss falls, the step and learning rate are right, and the run quietly trains on half as much distinct data — this happened, to the TinyStories baseline |
+| `the_streamer_sees_exactly_what_generate_produced` | a chat streamer that keeps the prompt. `talk.py` shipped saving the *system prompt* as every reply, invisible until the second turn |
+| `untied_merge_reproduces_the_trained_model_exactly` | merging an adapter into tied embeddings, which silently changes the model you talk to from the one you trained |
+| `a_kill_mid_save_leaves_the_last_good_checkpoint` | a 1.1 GB checkpoint half-written when stop.bat kills training |
+| `untrained_markers_are_reseeded` | ChatML markers left as noise in a base model's embedding table, so the model answers correctly and can never stop |
 
 ### The failure mode these are aimed at
 

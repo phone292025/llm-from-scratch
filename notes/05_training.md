@@ -190,6 +190,14 @@ Checkpointing saves model, optimizer state, scheduler state and step count. Mode
 not resumable — restarting without Adam's moments causes a visible loss spike as the estimates
 rebuild from nothing.
 
+**The position in the data is state too**, and the first version of the loop forgot it. It
+iterated a shuffling `DataLoader` whose permutation came from the global RNG, which a restart
+reseeds — so every resume began the data stream again from its first batch. Nothing printed looked
+wrong: loss fell, the step and the learning rate were right. The TinyStories baseline was resumed
+five times and saw 19,000 distinct batches in 40,000 steps. The fix makes the order a pure function
+of `(seed, epoch)`, so resuming at step `s` is a seek to batch `s × accum_steps` and the checkpoint
+needs nothing extra. `--stop-at N` pauses cleanly before step N without shortening the schedule.
+
 ## 7. What gets built
 
 ```python
@@ -233,7 +241,7 @@ Plus a CLI: `python -m llm.train --preset small --data data/processed --steps 10
 | LR schedule hits peak exactly at `warmup_steps` and `min_lr_ratio` at the end | off-by-one in the schedule |
 | gradient accumulation over N micro-batches equals one batch of N×size | the missing `/accum_steps` |
 | no weight decay is applied to biases or norm parameters | the parameter grouping |
-| save → load → resume continues with identical loss | incomplete checkpoint state |
+| a paused-and-resumed run matches an uninterrupted one bit for bit, losses and weights | incomplete checkpoint state — including the data position, which was missing until this test existed |
 
 ## Demo
 

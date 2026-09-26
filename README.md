@@ -15,13 +15,14 @@ Nothing gets coded until its note is read.
 | # | Note | Builds | Status |
 |---|------|--------|--------|
 | 0 | [The mental model](notes/00_overview.md) | — (read first) | [x] written |
-| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `bpe.py` `dataset.py` | [x] **built, 99 tests pass** |
+| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `bpe.py` `dataset.py` | [x] **built, 99 tests pass** (26 + 73 for the BPE trainer) |
 | 2 | [Attention](notes/02_attention.md) | `attention.py` `config.py` | [x] **built, 38 tests pass** |
 | 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [x] **built, 27 tests pass** |
-| 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [x] **built, 37 tests pass** |
-| 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 30 tests pass** |
-| 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 39 tests pass** |
-| 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] `rope.py` — `MODERN` builds and trains |
+| 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [x] **built, 41 tests pass** |
+| 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 41 tests pass** |
+| 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 42 tests pass** |
+| 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] **built, 44 tests pass** — `MODERN` builds and trains |
+| v3 | [Chat](docs/ROADMAP.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [ ] **54 tests pass**; training paused at step 200 of 759 |
 
 
 ### Beyond the notes
@@ -30,8 +31,8 @@ Four models, in the order they were built.
 
 | | Result |
 |---|---|
-| TinyStories, v1 architecture, trained here | validation loss **1.3935** (perplexity 4.03) on 328M tokens |
-| TinyStories, **v2** architecture (RoPE + RMSNorm + SwiGLU + GQA) | validation loss **1.3864** — 0.5% better on 10% fewer parameters, in 45 min against 70 |
+| TinyStories, v1 architecture, trained here | validation loss **1.3937** (perplexity 4.03) on 328M tokens — but see below |
+| TinyStories, **v2** architecture (RoPE + RMSNorm + SwiGLU + GQA) | validation loss **1.3867** on 10% fewer parameters, in 45 min against 70 |
 | GPT-2 124M, instruction-tuned here | answers questions, badly; validation loss **2.0695** |
 | Qwen3-1.7B-Base, chat fine-tuned here | multi-turn conversation — see below |
 
@@ -47,9 +48,17 @@ parameters is too small to know much, Alpaca is single-turn *tasks* rather than 
 the chat script sent one message at a time with no history. The fix was a modern base model,
 multi-turn data, and ChatML — see [ROADMAP v3](docs/ROADMAP.md).
 
+**The v1-vs-v2 loss comparison is not settled.** A bug found later (fixed in `733eafd`) made
+every resumed run restart its data stream from the first batch instead of continuing it. The v1
+run was resumed five times and saw only 19,000 distinct batches in 40,000 steps, some of them five
+times over; the v2 run was never interrupted. The measured gap, 0.0070, may be partly or entirely
+that difference. The speed and parameter results stand, since neither depends on the data order.
+Settling it means rerunning v1 uninterrupted on the fixed code — see
+[note 7 §5](notes/07_modern_upgrades.md).
+
 That is also the sharpest thing this project taught. The architecture is not the hard part:
 `MODERN` is essentially Qwen3's transformer block, written from scratch over a weekend, and it
-beat the 2019 design on the first try. What a laptop cannot produce is *pretraining compute*.
+trains faster at a smaller size than the 2019 design, with at least equal loss. What a laptop cannot produce is *pretraining compute*.
 This machine sustains about 12.5 TFLOPS; a frontier pretraining run is on the order of 1e25
 FLOPs, which is roughly **25,000 years** of it. Fine-tuning moves style, format and manner. It
 does not move knowledge.
@@ -108,8 +117,15 @@ src/llm/
   train.py       the training loop
   checkpoint.py  save/load/resume
   gpt2_weights.py  load real OpenAI GPT-2 weights into my model (correctness proof)
-tests/           one test file per note
-scripts/         runnable demos that print shapes
+  prepare.py     train a tokenizer on a corpus and encode it to disk
+  losses.py      cross-entropy, and token-weighted evaluation
+  instruct.py    Alpaca-format instruction data, prompt masked from the loss
+  sft.py         instruction-tune GPT-2 (the first v3 attempt)
+  chat_data.py   multi-turn ChatML conversations, every assistant turn graded
+  chat_sft.py    LoRA fine-tune Qwen3-1.7B-Base into a chat model
+  chat_infer.py  load the chat model and stream its replies (used by scripts/talk.py)
+tests/           one test file per note, plus one per v3 module
+scripts/         runnable demos that print shapes; chat.py and talk.py to talk to the models
 data/            training corpus (gitignored)
 checkpoints/     weights (gitignored)
 ```

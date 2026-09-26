@@ -171,6 +171,34 @@ because it contradicts the impression the field's marketing gives.
 The exceptions are structural rather than about loss: RoPE genuinely unlocks long context, and GQA
 genuinely unlocks cheap inference. Those matter more than their loss curves suggest.
 
+### What the run measured, and why it does not settle anything yet
+
+Full validation split, both models on identical data and schedule, scored per token:
+
+| | v1 `tinystories` | v2 `modern-tinystories` |
+|---|---|---|
+| validation loss | 1.3937 | **1.3867** |
+| parameters | 17,843,200 | 16,003,584 |
+| wall clock | 70 min | **45 min** |
+
+The speed and size results are solid. The loss result is not, for a reason that has nothing to do
+with architecture: **the v1 run was resumed five times, and resuming was broken.** Every resume
+restarted the shuffled data stream from its first batch instead of continuing it. Traced through
+the five resume points, v1's 40,000 steps covered only 19,000 distinct batches — the earliest of
+them five times — while v2, never interrupted, covered 40,000. Steps 10,001–20,001 and every step
+from 29,001 to the end retrained v1 on batches it had already seen. Half as much distinct text is a
+plausible explanation for a gap of 0.0070 on its own; this run cannot say how much of the gap it
+accounts for.
+
+So the honest reading is "v2 is at least as good, and much cheaper". Whether it is *better* needs v1
+rerun uninterrupted on the fixed code (`733eafd`), about 70 minutes, and ideally both arms again,
+since the fixed code draws a different — though equally random — order.
+
+The lesson is the same one this project keeps producing. The bug was invisible in every number the
+run printed: loss fell, the step counter was right, the learning rate was right, and the existing
+resume tests checked exactly those. The test that would have caught it — does a resumed run match
+one that never stopped? — was listed in note 5 and never written.
+
 ## 6. Where to go after this
 
 Not in the plan, but the natural next steps once `MODERN` is trained:
