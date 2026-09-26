@@ -30,7 +30,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
+import shutil
 import time
 from pathlib import Path
 
@@ -38,6 +40,7 @@ import torch
 import torch.nn.functional as F
 
 from llm.chat_data import IGNORE, ChatDataset, collate, length_grouped_batches, render
+from llm.chat_infer import find_checkpoint
 
 BASE_MODEL = "Qwen/Qwen3-1.7B-Base"
 
@@ -171,7 +174,8 @@ def sample(model, tok, messages, max_new_tokens: int = 64) -> str:
     was_training = model.training
     model.eval()
     try:
-        ids = tok(render(messages), return_tensors="pt").input_ids.to(model.device)
+        ids = tok(render(messages), return_tensors="pt",
+                  add_special_tokens=False).input_ids.to(model.device)
         out = model.generate(
             ids, max_new_tokens=max_new_tokens, do_sample=False,
             eos_token_id=tok.convert_tokens_to_ids("<|im_end|>"), pad_token_id=tok.pad_token_id,
@@ -183,18 +187,81 @@ def sample(model, tok, messages, max_new_tokens: int = 64) -> str:
 
 @torch.no_grad()
 def evaluate(model, batches, data, pad_id, device, limit: int) -> float:
+    """Mean loss per graded token over the first `limit` validation batches.
+
+    Per token, not per conversation: averaging each conversation's mean gave a two-line greeting
+    the same weight as a forty-line explanation. Numbers from before this change read slightly
+    differently for that reason alone.
+    """
     model.eval()
-    total, counted = 0.0, 0
+    total, tokens = 0.0, 0
     for batch in batches[:limit]:
         x, y = collate([data[i] for i in batch], pad_id)
         x, y = x.to(device), y.to(device)
         logits = model(input_ids=x).logits
-        loss = F.cross_entropy(logits.flatten(0, 1).float(), y.flatten(), ignore_index=IGNORE)
-        if not torch.isnan(loss):
-            total += loss.item()
-            counted += 1
+        total += F.cross_entropy(logits.flatten(0, 1).float(), y.flatten(),
+                                 ignore_index=IGNORE, reduction="sum").item()
+        tokens += int((y != IGNORE).sum())
     model.train()
-    return total / max(counted, 1)
+    return total / max(tokens, 1)
+
+
+def epoch_batches(data, batch_size: int, seed: int, epoch: int) -> list[list[int]]:
+    """The batch order for one epoch, drawn from (seed, epoch) alone.
+
+    Epoch 0 is exactly the order this run always used, so a run paused before this change resumes
+    onto the same stream. Before, later epochs were reshuffled with `seed + step` -- whatever step
+    the wrap happened to land on -- and a resume always rebuilt epoch 0, so resuming anywhere in
+    epoch two would have replayed epoch one. Neither mattered for the one-epoch run; both would
+    have on the default of two.
+    """
+    return length_grouped_batches(data, batch_size, seed=seed + epoch)
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
+                    finished: bool = False) -> Path:
+    """Write a complete checkpoint into its own directory, then point `latest.json` at it.
+
+    A save is 1.1 GB -- the adapter carries the 311M-entry embedding table because lm_head is a
+    LoRA target -- and stop.bat ends training with a hard kill. The first version wrote the
+    adapter, the optimizer and the step count over the previous ones in turn, so a kill mid-save
+    left a truncated adapter, or a new adapter beside an old optimizer. Here everything goes into
+    a `.partial` directory first, which is renamed into place whole; the pointer, a few bytes
+    written atomically, moves last. A kill at any moment leaves the pointer on a checkpoint that
+    finished writing.
+    """
+    final = out / f"step-{step:06d}"
+    partial = out / f".{final.name}.partial"
+    if partial.exists():
+        shutil.rmtree(partial)
+    partial.mkdir(parents=True)
+    model.save_pretrained(partial / "adapter")
+    torch.save(opt.state_dict(), partial / "optimizer.pt")
+    rng = {"cpu": torch.get_rng_state()}
+    if torch.cuda.is_available():
+        rng["cuda"] = torch.cuda.get_rng_state_all()
+    torch.save(rng, partial / "rng.pt")
+    (partial / "state.json").write_text(
+        json.dumps({"step": step, "base": base, "finished": finished}), encoding="utf-8")
+    if final.exists():
+        shutil.rmtree(final)
+    os.replace(partial, final)
+    _write_json_atomic(out / "latest.json", {"dir": final.name, "step": step})
+
+    # Keep the newest few, never the one the pointer names, and clear any abandoned partials.
+    saved = sorted(out.glob("step-[0-9]*"), key=lambda d: d.name)
+    for old in saved[:-keep]:
+        if old != final:
+            shutil.rmtree(old, ignore_errors=True)
+    for stale in out.glob(".step-*.partial"):
+        shutil.rmtree(stale, ignore_errors=True)
+    return final
 
 
 def main() -> None:
@@ -292,20 +359,35 @@ def main() -> None:
         return args.lr * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(progress, 1.0))))
 
     start_step = 0
-    if args.resume and (out / "adapter" / "adapter_model.safetensors").exists():
+    found = find_checkpoint(out) if args.resume else None
+    if args.resume and found is None:
+        print("resumed     nothing to resume in " + str(out) + " -- starting from step 0")
+    if found is not None:
         from peft import set_peft_model_state_dict
         from safetensors.torch import load_file
-        set_peft_model_state_dict(model, load_file(out / "adapter" / "adapter_model.safetensors"))
-        state = json.loads((out / "state.json").read_text())
-        start_step = state["step"]
-        opt.load_state_dict(torch.load(out / "optimizer.pt", map_location=device))
-        print(f"resumed     from step {start_step}")
+
+        loaded = set_peft_model_state_dict(model, load_file(found / "adapter" / "adapter_model.safetensors"))
+        if loaded.unexpected_keys:
+            # A partial load would carry on from half-fresh weights while claiming to resume.
+            raise SystemExit(f"adapter at {found} does not fit this model: "
+                             f"{loaded.unexpected_keys[:3]} ...")
+        start_step = json.loads((found / "state.json").read_text(encoding="utf-8"))["step"]
+        opt.load_state_dict(torch.load(found / "optimizer.pt", map_location=device))
+        if (found / "rng.pt").exists():
+            rng = torch.load(found / "rng.pt")
+            torch.set_rng_state(rng["cpu"])
+            if "cuda" in rng and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(rng["cuda"])
+        where = found.name if found != out else "original layout"
+        print(f"resumed     from step {start_step} ({where})")
 
     metrics = (out / "metrics.jsonl").open("a", encoding="utf-8")
     pad_id = tok.pad_token_id
     model.train()
     t0 = time.perf_counter()
-    cursor = (start_step * args.accum) % len(batches)
+    # Where the run is in the data is arithmetic on the step, so resuming is a seek.
+    epoch, cursor = divmod(start_step * args.accum, len(batches))
+    batches = epoch_batches(train_data, args.batch_size, args.seed, epoch)
     seen = 0
 
     for step in range(start_step, max_steps):
@@ -314,9 +396,9 @@ def main() -> None:
 
         running = 0.0
         for _ in range(args.accum):
-            if cursor >= len(batches):           # next epoch: reshuffle the batch order
-                batches = length_grouped_batches(train_data, args.batch_size,
-                                                 seed=args.seed + step)
+            if cursor >= len(batches):           # next epoch: its own order, from (seed, epoch)
+                epoch += 1
+                batches = epoch_batches(train_data, args.batch_size, args.seed, epoch)
                 cursor = 0
             x, y = collate([train_data[i] for i in batches[cursor]], pad_id)
             cursor += 1
@@ -358,14 +440,12 @@ def main() -> None:
                       flush=True)
             model.config.use_cache = False
 
-        if args.save_every and (step + 1) % args.save_every == 0:
-            model.save_pretrained(out / "adapter")
-            torch.save(opt.state_dict(), out / "optimizer.pt")
-            (out / "state.json").write_text(json.dumps({"step": step + 1, "base": args.base}))
+        if args.save_every and (step + 1) % args.save_every == 0 and step + 1 < max_steps:
+            save_checkpoint(out, model, opt, step + 1, args.base)
 
-    model.save_pretrained(out / "adapter")
-    (out / "state.json").write_text(json.dumps({"step": max_steps, "base": args.base}))
-    print(f"\ndone in {(time.perf_counter() - t0) / 60:.1f} min -> {out / 'adapter'}")
+    final = save_checkpoint(out, model, opt, max_steps, args.base, finished=True)
+    print(f"\ndone in {(time.perf_counter() - t0) / 60:.1f} min -> {final / 'adapter'}")
+    print("talk to it:  python scripts/talk.py")
     metrics.close()
 
 

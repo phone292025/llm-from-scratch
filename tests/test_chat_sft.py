@@ -15,11 +15,22 @@ is nothing to train. These tests exist so it cannot come back.
 
 from __future__ import annotations
 
+import json
+import pathlib
+
 import pytest
 import torch
 from torch import nn
 
-from llm.chat_sft import PROBE_PROMPTS, init_chat_tokens, oasst_conversations
+from llm.chat_data import length_grouped_batches
+from llm.chat_infer import find_checkpoint
+from llm.chat_sft import (
+    PROBE_PROMPTS,
+    epoch_batches,
+    init_chat_tokens,
+    oasst_conversations,
+    save_checkpoint,
+)
 
 VOCAB, DIM = 64, 8
 TRAINED_NORM = 1.6
@@ -188,3 +199,108 @@ def test_oasst_skips_other_languages_and_deleted_rows() -> None:
          "lang": "en", "rank": None, "deleted": True},
     ]
     assert oasst_conversations(rows, limit=10) == []
+
+
+# --- data order across epochs and resumes -------------------------------------------------------
+
+
+class Lengths:
+    """A dataset reduced to what batching reads: example i has length lengths[i]."""
+
+    def __init__(self, lengths):
+        self.lengths = lengths
+
+    def __len__(self):
+        return len(self.lengths)
+
+    def __getitem__(self, i):
+        return [0] * self.lengths[i], [0] * self.lengths[i]
+
+
+@pytest.fixture
+def data() -> Lengths:
+    return Lengths([(i * 37) % 50 + 1 for i in range(60)])
+
+
+def test_epoch_zero_is_the_order_the_paused_run_used(data) -> None:
+    """The chat run paused at step 200 was built with length_grouped_batches(seed). Its first epoch
+    must come back identical, or resuming it lands on a different data stream."""
+    assert epoch_batches(data, 4, seed=0, epoch=0) == length_grouped_batches(data, 4, seed=0)
+
+
+def test_each_epoch_has_its_own_order_over_the_same_batches(data) -> None:
+    first, second = (epoch_batches(data, 4, seed=0, epoch=e) for e in (0, 1))
+    assert first != second
+    assert sorted(map(sorted, first)) == sorted(map(sorted, second))
+
+
+def test_an_epoch_order_depends_on_the_epoch_alone(data) -> None:
+    """Resuming in epoch two must rebuild epoch two -- the old code seeded it with whichever step
+    the wrap happened on, which a resume has no way to know."""
+    assert epoch_batches(data, 4, seed=0, epoch=3) == epoch_batches(data, 4, seed=0, epoch=3)
+
+
+# --- checkpoints that survive stop.bat ----------------------------------------------------------
+
+
+class FakeAdapter:
+    """Writes what save_pretrained writes; can be told to die partway, as a hard kill would."""
+
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+
+    def save_pretrained(self, path):
+        path = pathlib.Path(path)
+        path.mkdir(parents=True)
+        (path / "adapter_config.json").write_text("{}")
+        if self.fail:
+            raise KeyboardInterrupt("killed mid-save")
+        (path / "adapter_model.safetensors").write_bytes(b"weights")
+
+
+@pytest.fixture
+def opt():
+    return torch.optim.SGD([torch.nn.Parameter(torch.zeros(2))], lr=0.1)
+
+
+def test_a_save_is_complete_and_pointed_at(tmp_path, opt) -> None:
+    final = save_checkpoint(tmp_path, FakeAdapter(), opt, 300, "some/base")
+    assert final == tmp_path / "step-000300"
+    assert find_checkpoint(tmp_path) == final
+    assert json.loads((final / "state.json").read_text())["step"] == 300
+    assert (final / "optimizer.pt").exists() and (final / "rng.pt").exists()
+
+
+def test_a_kill_mid_save_leaves_the_last_good_checkpoint(tmp_path, opt) -> None:
+    """The failure the old layout could not survive: interrupted while writing the adapter."""
+    good = save_checkpoint(tmp_path, FakeAdapter(), opt, 200, "some/base")
+    with pytest.raises(KeyboardInterrupt):
+        save_checkpoint(tmp_path, FakeAdapter(fail=True), opt, 300, "some/base")
+    assert find_checkpoint(tmp_path) == good
+    assert not (tmp_path / "step-000300").exists()
+
+
+def test_the_next_save_clears_an_abandoned_partial(tmp_path, opt) -> None:
+    with pytest.raises(KeyboardInterrupt):
+        save_checkpoint(tmp_path, FakeAdapter(fail=True), opt, 300, "some/base")
+    save_checkpoint(tmp_path, FakeAdapter(), opt, 300, "some/base")
+    assert not list(tmp_path.glob(".step-*.partial"))
+
+
+def test_only_the_newest_checkpoints_are_kept(tmp_path, opt) -> None:
+    """Each one is 1.1 GB. Two is enough to survive one bad save."""
+    for step in (100, 200, 300, 400):
+        save_checkpoint(tmp_path, FakeAdapter(), opt, step, "some/base", keep=2)
+    kept = sorted(d.name for d in tmp_path.glob("step-*"))
+    assert kept == ["step-000300", "step-000400"]
+
+
+def test_the_original_layout_is_left_alone(tmp_path, opt) -> None:
+    """The paused run's step-200 files sit directly in the run directory. New saves go beside them
+    and must not delete them -- they are the only copy until the first new save lands."""
+    (tmp_path / "adapter").mkdir()
+    (tmp_path / "adapter" / "adapter_model.safetensors").write_bytes(b"old")
+    (tmp_path / "state.json").write_text(json.dumps({"step": 200}))
+    save_checkpoint(tmp_path, FakeAdapter(), opt, 300, "some/base")
+    assert (tmp_path / "adapter" / "adapter_model.safetensors").exists()
+    assert find_checkpoint(tmp_path) == tmp_path / "step-000300"
