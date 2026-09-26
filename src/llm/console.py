@@ -15,12 +15,16 @@ import sys
 
 
 def use_utf8() -> None:
-    """Switch stdout and stderr to UTF-8, replacing anything the terminal cannot render.
+    """Switch stdin, stdout and stderr to UTF-8, replacing anything that cannot be decoded.
 
     `errors="replace"` rather than "strict": a character the font lacks should show as a
     replacement mark, not end the program.
+
+    stdin matters for the chat scripts. Typed into a console, Windows hands Python Unicode
+    directly; *piped* in, the bytes are decoded with the locale's codepage -- cp1252 here -- so
+    a Burmese greeting arrived at the model as `\u00e1\u20ac\u2122...` and it answered the mojibake.
     """
-    for stream in (sys.stdout, sys.stderr):
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             try:
