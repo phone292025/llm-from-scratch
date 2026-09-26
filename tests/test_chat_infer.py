@@ -25,6 +25,15 @@ from llm.chat_infer import (
 
 STOP = "<|im_end|>"
 
+# peft warns whenever a tied model has lm_head in its adapter. These tests build that situation on
+# purpose -- it is the one untie_output_head exists for -- so the warnings are the subject, not a
+# symptom. Filtered by message so any *other* warning still shows.
+pytestmark = [
+    pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`:UserWarning"),
+    pytest.mark.filterwarnings("ignore:Model with `tie_word_embeddings=True`:UserWarning"),
+    pytest.mark.filterwarnings("ignore:Setting `save_embedding_layers` to `True`:UserWarning"),
+]
+
 
 class ByteTok:
     """Every id below 256 is that byte; 256 is the stop marker. The bottom of a real BPE vocabulary
