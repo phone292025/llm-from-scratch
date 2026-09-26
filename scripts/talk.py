@@ -115,10 +115,11 @@ def main() -> None:
 
         sys.stdout.write(BLUE)
         streamer = ReplyStreamer(tok)
+        # Sampling knobs only when sampling; greedy decoding with them set earns a warning per turn.
+        sampling = {"do_sample": True, "temperature": temp, "top_p": top_p} if temp > 0 else {"do_sample": False}
         with torch.no_grad():
             model.generate(
-                ids, streamer=streamer, max_new_tokens=max_new,
-                do_sample=temp > 0, temperature=max(temp, 1e-5), top_p=top_p,
+                ids, streamer=streamer, max_new_tokens=max_new, **sampling,
                 eos_token_id=im_end, pad_token_id=tok.pad_token_id,
                 repetition_penalty=args.repetition_penalty,
             )
