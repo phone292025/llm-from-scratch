@@ -55,6 +55,8 @@ def main() -> None:
     # included, so it pushes the model *away* from repeating your name back to you -- the exact
     # behaviour the fine-tune was for.
     p.add_argument("--repetition-penalty", type=float, default=1.0)
+    p.add_argument("--trained-len", type=int, default=768,
+                   help="the longest conversation the fine-tune saw, in tokens (chat_sft --max-len)")
     args = p.parse_args()
 
     adapter = None if args.no_adapter else args.adapter
@@ -70,6 +72,7 @@ def main() -> None:
     im_end = tok.convert_tokens_to_ids(IM_END)
     system, messages = args.system, []
     temp, top_p, max_new = args.temp, args.top_p, args.len
+    warned = False
 
     print(f"{GREY}Type /help for commands, /quit to leave.{OFF}\n")
     while True:
@@ -86,7 +89,7 @@ def main() -> None:
             if cmd in ("quit", "exit", "q"):
                 break
             elif cmd in ("new", "reset"):
-                messages = []
+                messages, warned = [], False
                 print(f"{GREY}new conversation{OFF}\n")
             elif cmd == "system" and rest:
                 system = rest
@@ -100,8 +103,9 @@ def main() -> None:
             elif cmd == "history":
                 print(f"{GREY}{render(messages, system)}{OFF}")
             elif cmd == "settings":
-                print(f"{GREY}temp {temp}  top_p {top_p}  len {max_new}  "
-                      f"turns {len(messages)}\n  system: {system}{OFF}\n")
+                used = len(tok(render(messages, system), add_special_tokens=False).input_ids)
+                print(f"{GREY}temp {temp}  top_p {top_p}  len {max_new}  turns {len(messages)}  "
+                      f"context {used}/{args.trained_len} tokens\n  system: {system}{OFF}\n")
             elif cmd == "help":
                 print(f"{GREY}{HELP}{OFF}")
             else:
@@ -112,6 +116,13 @@ def main() -> None:
         # The whole conversation, every turn, tokenized exactly as training tokenized it.
         ids = tok(render(messages, system), return_tensors="pt",
                   add_special_tokens=False).input_ids.to(model.device)
+        if not warned and ids.shape[1] > args.trained_len:
+            # Qwen3 reads far longer contexts, but the fine-tune only ever showed it conversations
+            # up to this length, so past it the chat behaviour is untrained. Said once, not nagged.
+            print(f"{GREY}(this conversation is now {ids.shape[1]} tokens, longer than any the "
+                  f"model was fine-tuned on ({args.trained_len}). Replies may drift; /new starts "
+                  f"fresh.){OFF}")
+            warned = True
 
         sys.stdout.write(BLUE)
         streamer = ReplyStreamer(tok)
