@@ -51,10 +51,12 @@ chore(env): pin torch to the cu128 index for Blackwell
 Optional, and only when the subject cannot carry it. Use it for **why**, for measured numbers, and
 for corrections to earlier claims. Wrap at 80 characters. Skip it for small, obvious changes.
 
-Attribution line on every commit:
+Attribution line on every commit, naming the model that actually made the change -- the model
+changes between sessions, and a trailer naming the wrong one is a false record that cannot be
+edited out of the history once pushed:
 
 ```
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ```
 
 ### Not used here
