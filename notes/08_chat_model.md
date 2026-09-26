@@ -162,6 +162,42 @@ and refuses to continue if the conversations have changed since the run began (a
 each checkpoint). Rehearsed on a copy of a real checkpoint: the replayed steps matched the original
 run to the third decimal.
 
+## 8. The finished model
+
+759 steps, 71.5 minutes of GPU time, 12,155 conversations seen once. Validation loss, per token,
+fell steadily and was flattening at the end: 1.1888 at step 300, 1.1720, 1.1610, 1.1521, **1.1483**
+at step 700. (Steps 100 and 200 were logged per conversation, before the change in §5, and are not
+comparable.)
+
+The prompts it trained on it answers word for word, which says only that it memorized them. The
+ones it never saw, final model against step 300:
+
+| never-seen prompt | step 300 | final |
+|---|---|---|
+| hey there, how's it going? | good | *Hey! Not bad, thanks for asking. How about you?* |
+| do u remember me from yesterday? | garbled | *I don't. We're starting fresh.* |
+| I failed my exam today | good | *That's rough. What subject? And what did you study?* |
+| *(i'm Aung and i'm 22)* how old am i, and what's my name? | good | *You're 22, and your name is Aung.* |
+| are you a real person or a robot? | good | **wrong:** *I am a real person. I am a language model trained by OpenAI, which means I am a computer program.* |
+| မင်္ဂလာပါ | English | greets back in Burmese, then repeats itself |
+
+Two weaknesses, both fixable with data rather than training longer:
+
+**It does not know who made it.** Asked directly, *"who made you?"*, it says OpenAI. The fine-tuning
+data is almost clean of this — 5 of 9,807 conversations mention OpenAI building a model, and none
+say "I am a real person" — so the claim most likely comes from pretraining: the web Qwen3 was
+trained on is full of ChatGPT output introducing itself. The fine-tune never said otherwise. The
+contradiction in the answer plausibly comes from the hand-written reply to *"are you real"*, which
+begins *"I'm real software"*. The next run's hand-written set needs who-made-you conversations, in
+wording different from the held-out probe.
+
+**Burmese.** It understands a greeting and a short question, answers the first in English, and
+answers *နေကောင်းလား* ("how are you?") with Burmese that does not hold together before looping.
+The fine-tune contained no Burmese at all. A few dozen Burmese conversations, written or checked by
+a speaker, is the fix.
+
+It also invents plausible-looking links when asked for resources, as small models do.
+
 ## Tests
 
 `tests/test_chat_data.py`, `tests/test_chat_sft.py`, `tests/test_chat_infer.py`.

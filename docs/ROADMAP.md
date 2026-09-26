@@ -106,6 +106,11 @@ because those were bought with electricity somebody else spent.
 So v3 takes a pretrained base and does the part that *is* in reach. `src/llm/chat_sft.py` is the
 one module in this project that uses somebody else's model code, and that file says why.
 
+**Done:** Qwen3-1.7B-Base, LoRA fine-tuned for 759 steps on 12,155 conversations. It holds a
+conversation, keeps what it was told across turns, and answers four of six prompts it never saw
+in training well. Not yet: it believes OpenAI made it, and it cannot hold a conversation in
+Burmese. Both are data. The full account is [note 8](../notes/08_chat_model.md).
+
 ---
 
 ## Deliberately not doing

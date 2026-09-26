@@ -22,7 +22,7 @@ Nothing gets coded until its note is read.
 | 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 41 tests pass** |
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 42 tests pass** |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] **built, 44 tests pass** — `MODERN` builds and trains |
-| 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [ ] **54 tests pass**; training paused at step 200 of 759 |
+| 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [x] **built, 68 tests pass** — trained, 759 steps |
 
 
 ### Beyond the notes
@@ -34,7 +34,7 @@ Four models, in the order they were built.
 | TinyStories, v1 architecture, trained here | validation loss **1.3937** (perplexity 4.03) on 328M tokens — but see below |
 | TinyStories, **v2** architecture (RoPE + RMSNorm + SwiGLU + GQA) | validation loss **1.3867** on 10% fewer parameters, in 45 min against 70 |
 | GPT-2 124M, instruction-tuned here | answers questions, badly; validation loss **2.0695** |
-| Qwen3-1.7B-Base, chat fine-tuned here | multi-turn conversation — see below |
+| Qwen3-1.7B-Base, chat fine-tuned here | holds a conversation and remembers what you told it; 4 of 6 never-seen probes answered well, 1 partly — see [note 8 §8](notes/08_chat_model.md) |
 
 ```bash
 .venv/Scripts/python scripts/talk.py                                    # the chat model
