@@ -154,7 +154,10 @@ def load_chat_model(base: str, adapter: str | Path | None, device: str | None = 
     tok = AutoTokenizer.from_pretrained(base)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
-    model = AutoModelForCausalLM.from_pretrained(base, dtype=torch.bfloat16)
+    # bf16 on the GPU. On the CPU fp32 is both faster and more accurate -- most CPUs have no
+    # bf16 matrix units -- and 7 GB of RAM is affordable where 7 GB of VRAM is not.
+    dtype = torch.bfloat16 if str(device).startswith("cuda") else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(base, dtype=dtype)
     init_chat_tokens(model, tok)
 
     resolved = resolve_adapter(adapter) if adapter else None
