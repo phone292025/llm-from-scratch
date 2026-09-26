@@ -67,8 +67,12 @@ class ReplyStreamer:
 
     @property
     def reply(self) -> str:
-        """The reply as it belongs in the history: up to the stop marker, trimmed."""
-        return self.text.split(self.stop)[0].strip()
+        """The reply as it belongs in the history: up to the stop marker, trimmed.
+
+        A reply cut off by the length limit can end halfway through a multi-byte character,
+        which decodes to U+FFFD. That half-character was never content, so it is dropped.
+        """
+        return self.text.split(self.stop)[0].rstrip(REPLACEMENT).strip()
 
     def _flush(self, final: bool) -> None:
         if self._stopped:
@@ -76,10 +80,12 @@ class ReplyStreamer:
         text = self.text
         if self.stop in text:
             text, self._stopped = text.split(self.stop)[0], True
-        elif not final:
+        else:
             # An incomplete multi-byte character decodes to U+FFFD until its last byte arrives.
-            # Hold it back rather than print a fragment; the next token usually completes it.
+            # Hold it back rather than print a fragment; the next token usually completes it --
+            # and at the end, a fragment left by the length limit is dropped rather than shown.
             text = text.rstrip(REPLACEMENT)
+        if not final and not self._stopped:
             # A stop marker arriving as several pieces would otherwise flash its prefix.
             for k in range(len(self.stop) - 1, 0, -1):
                 if text.endswith(self.stop[:k]):

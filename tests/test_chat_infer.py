@@ -83,6 +83,16 @@ def test_multibyte_characters_print_whole() -> None:
     assert screen == text and s.reply == text
 
 
+def test_a_reply_cut_off_mid_character_drops_the_fragment() -> None:
+    """The length limit can stop generation between the bytes of one character. What remains is
+    half a character, U+FFFD when decoded -- not something the model said."""
+    burmese = "\u1019\u1004\u103a"
+    cut = list(burmese.encode())[:-1]          # the last byte never arrives
+    s, screen = stream(cut)
+    assert REPLACEMENT not in s.reply and REPLACEMENT not in screen
+    assert s.reply == burmese[:-1]
+
+
 def test_a_stop_marker_split_across_tokens_never_flashes() -> None:
     """If the marker arrives as ordinary text pieces, its prefix must not reach the screen."""
     s, screen = stream(list(b"Hey!") + list(STOP.encode()) + list(b"junk"))
