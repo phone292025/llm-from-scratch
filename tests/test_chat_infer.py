@@ -19,6 +19,8 @@ from llm.chat_infer import (
     REPLACEMENT,
     ReplyStreamer,
     find_checkpoint,
+    fit_history,
+    read_message,
     resolve_adapter,
     untie_output_head,
 )
@@ -227,3 +229,78 @@ def test_resolve_accepts_an_adapter_or_a_run(tmp_path) -> None:
     adapter = tmp_path / "step-000300" / "adapter"
     assert resolve_adapter(adapter) == adapter
     assert resolve_adapter(tmp_path) == adapter
+
+
+# --- reading a message -------------------------------------------------------------------------
+
+
+def _typed(lines, queued_after):
+    """Fake console: `lines` arrive in order; `queued_after` lines were pasted along with the first."""
+    feed = iter(lines)
+    state = {"read": 0}
+
+    def read_line(prompt):
+        state["read"] += 1
+        return next(feed)
+
+    def more_waiting():
+        return state["read"] <= queued_after
+
+    return read_line, more_waiting
+
+
+def test_a_pasted_block_is_one_message() -> None:
+    """The bug: a pasted assignment arrived as seventy messages and got seventy replies."""
+    paste = ["Task 1: Complete the Topology Design", "", "1. Establish wired connections",
+             "* For Block A connection to Block B, both routers must be using Se2/0 interfaces."]
+    read_line, more = _typed(paste + ["next message"], queued_after=len(paste) - 1)
+    assert read_message(read_line, more) == "\n".join(paste)
+    assert read_message(read_line, more) == "next message"
+
+
+def test_a_typed_line_is_its_own_message() -> None:
+    read_line, more = _typed(["hi", "how are you"], queued_after=0)
+    assert read_message(read_line, more) == "hi"
+    assert read_message(read_line, more) == "how are you"
+
+
+def test_a_three_quote_block_spans_lines_anywhere() -> None:
+    """Where a paste cannot be detected -- a pipe, another terminal -- a block still works."""
+    read_line, more = _typed(['"""', "line one", "", "line two", '"""', "after"], queued_after=0)
+    assert read_message(read_line, more) == "line one\n\nline two"
+    assert read_message(read_line, more) == "after"
+
+
+# --- keeping the conversation bounded ----------------------------------------------------------
+
+
+def _turns(n):
+    out = []
+    for i in range(n):
+        out += [{"role": "user", "content": f"question {i}"}, {"role": "assistant", "content": f"answer {i}"}]
+    return out
+
+
+def _count(messages):
+    return 10 * len(messages)
+
+
+def test_history_within_budget_is_untouched() -> None:
+    messages = _turns(3) + [{"role": "user", "content": "now"}]
+    assert fit_history(messages, _count, budget=1000) == (messages, 0)
+
+
+def test_the_oldest_exchanges_go_first_and_in_pairs() -> None:
+    messages = _turns(10) + [{"role": "user", "content": "now"}]
+    kept, dropped = fit_history(messages, _count, budget=50)
+    assert _count(kept) <= 50
+    assert kept[-1]["content"] == "now"
+    assert kept[0]["role"] == "user", "the history must never start with an orphaned reply"
+    assert dropped % 2 == 0 and kept == messages[dropped:]
+
+
+def test_the_newest_message_is_kept_even_alone_over_budget() -> None:
+    """Trimming what the user just said would answer a different question."""
+    messages = _turns(2) + [{"role": "user", "content": "a very long paste"}]
+    kept, _ = fit_history(messages, lambda m: 9999, budget=100)
+    assert kept == [messages[-1]]
