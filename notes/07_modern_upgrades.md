@@ -208,7 +208,7 @@ Not in the plan, but the natural next steps once `MODERN` is trained:
   compute. Wrong memory profile for 8 GB, but worth understanding.
 - **Speculative decoding** — a small model drafts, the big one verifies in parallel. Pure inference
   speed, no quality cost.
-- **Instruction tuning** — [ROADMAP](../docs/ROADMAP.md) v3, and the step that turns a text
+- **Instruction tuning** — [note 8](08_chat_model.md), and the step that turns a text
   completer into something that answers.
 
 ## Tests
@@ -239,4 +239,4 @@ v1 → v2 transition, and the artifact worth keeping from this project.
 
 ---
 
-Back to **[README](../README.md)**.
+Next: **[note 8 — a model you can talk to](08_chat_model.md)**.

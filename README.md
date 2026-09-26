@@ -22,7 +22,7 @@ Nothing gets coded until its note is read.
 | 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 41 tests pass** |
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 42 tests pass** |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] **built, 44 tests pass** — `MODERN` builds and trains |
-| v3 | [Chat](docs/ROADMAP.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [ ] **54 tests pass**; training paused at step 200 of 759 |
+| 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [ ] **54 tests pass**; training paused at step 200 of 759 |
 
 
 ### Beyond the notes
