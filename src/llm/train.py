@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import BatchSampler, DataLoader, RandomSampler
 
 from llm import checkpoint
 from llm.config import PRESETS, ModelConfig
@@ -58,6 +58,11 @@ class TrainConfig:
     seed: int = 0
     out_dir: Path = Path("checkpoints")
     save_every: int = 0
+    stop_at: int | None = None
+    """Stop cleanly before this step, saving a checkpoint, without shortening the schedule.
+
+    For "run 35,000 of 40,000 tonight and the rest tomorrow": the learning rate still follows the
+    40,000-step curve, and resuming finishes the run exactly as if it had never paused."""
 
 
 def pick_device() -> torch.device:
@@ -106,10 +111,50 @@ def check_vocabulary(cfg: ModelConfig, ids: np.ndarray, source: str) -> None:
         )
 
 
-def _infinite(loader: DataLoader):
-    """Cycle a loader forever, reshuffling each pass, so training is step-based not epoch-based."""
+def _batch_stream(loader: DataLoader, seed: int, start: int = 0):
+    """Batches forever, as a pure function of (seed, position in the stream).
+
+    The order a run sees its data is part of its state, exactly like the weights and Adam's
+    moments, and the first version of this loop stored it nowhere. It iterated a shuffling
+    DataLoader, whose permutation is drawn from the global RNG, and `train()` reseeds that RNG on
+    every start. So a resumed run did not continue the data stream -- it *restarted* it,
+    retraining on the batches from the beginning of the run and never reaching the ones it was
+    meant to see. The TinyStories baseline was resumed five times like that, and in 40,000 steps
+    saw only 19,000 distinct batches, the earliest of them five times over.
+
+    Here epoch `e` is the permutation drawn from `(seed, e)`, and batch `n` of the run is found by
+    arithmetic, so resuming at step `s` is a seek to batch `s * accum_steps`. Nothing extra goes
+    into the checkpoint: the step count already says where the stream is.
+
+    The loader is read rather than iterated. A shuffling one gets a fresh permutation per epoch.
+    One built from a precomputed list of batches -- length-grouped instruction data -- keeps that
+    list for the first epoch and reshuffles the order of its batches for every epoch after, which
+    the old loop never did. Anything else is taken in order.
+    """
+    dataset, collate, batch_sampler = loader.dataset, loader.collate_fn, loader.batch_sampler
+
+    def epoch_batches(epoch: int) -> list[list[int]]:
+        rng = np.random.default_rng([seed, epoch])
+        if isinstance(batch_sampler, BatchSampler) and isinstance(
+            batch_sampler.sampler, RandomSampler
+        ):
+            order = rng.permutation(len(dataset)).tolist()
+            size = batch_sampler.batch_size
+            count = len(order) // size if batch_sampler.drop_last else -(-len(order) // size)
+            return [order[i * size : (i + 1) * size] for i in range(count)]
+        batches = [list(b) for b in batch_sampler]
+        if not isinstance(batch_sampler, BatchSampler) and epoch > 0:
+            rng.shuffle(batches)
+        return batches
+
+    per_epoch = len(epoch_batches(0))
+    if per_epoch == 0:
+        raise ValueError("the training loader yields no batches -- the corpus is smaller than one")
+    epoch, offset = divmod(start, per_epoch)
     while True:
-        yield from loader
+        for indices in epoch_batches(epoch)[offset:]:
+            yield collate([dataset[i] for i in indices])
+        epoch, offset = epoch + 1, 0
 
 
 @torch.no_grad()
@@ -174,7 +219,6 @@ def train(
     use_amp = tcfg.bf16 and device.type == "cuda"
 
     history: dict[str, list] = {"step": [], "train_loss": [], "val_step": [], "val_loss": [], "lr": []}
-    batches = _infinite(train_loader)
     tokens_seen = 0
     tokens_here = 0  # since this process started, for an honest throughput figure
     elapsed_before = 0.0
@@ -189,6 +233,9 @@ def train(
         if verbose:
             print(f"  resumed from {resume_from} at step {start_step} "
                   f"({tokens_seen:,} tokens, {elapsed_before / 60:.1f} min already done)\n")
+
+    # Built after the resume, because where the stream starts depends on the step reached.
+    batches = _batch_stream(train_loader, tcfg.seed, start_step * tcfg.accum_steps)
 
     metrics = None
     if metrics_path is not None:
@@ -276,13 +323,22 @@ def train(
 
         # Saved on the last step too, so a finished run is always resumable -- to train further,
         # or to evaluate without redoing any of it.
-        if tcfg.save_every and step > start_step and (step % tcfg.save_every == 0 or is_last):
+        stopping = tcfg.stop_at is not None and step + 1 >= tcfg.stop_at and not is_last
+        if stopping or (
+            tcfg.save_every and step > start_step and (step % tcfg.save_every == 0 or is_last)
+        ):
             save_latest(step)
+        if stopping:
+            if verbose:
+                print(f"\n  stopped before step {step + 1:,} of {tcfg.max_steps:,} as asked; "
+                      f"resume with --resume to finish the schedule")
+            break
 
     if metrics is not None:
         metrics.close()
     history["elapsed"] = elapsed_before + time.perf_counter() - start
     history["tokens_seen"] = tokens_seen
+    history["finished"] = not history["step"] or history["step"][-1] == tcfg.max_steps - 1
     # Carried so the plot can draw the right "pure ignorance" line without being told twice.
     history["vocab_size"] = model.cfg.vocab_size
     return history
@@ -384,6 +440,9 @@ def main() -> None:
     p.add_argument("--save-every", type=int, default=0,
                    help="checkpoint every N steps; a crash then costs at most N steps")
     p.add_argument("--resume", action="store_true", help="continue from <out>/latest.pt")
+    p.add_argument("--stop-at", type=int, default=None,
+                   help="stop cleanly before this step without shortening the schedule; "
+                        "finish later with --resume")
     p.add_argument("--final-eval", action="store_true",
                    help="score the whole validation set at the end, not a sample of it")
     p.add_argument("--out", default="checkpoints")
@@ -446,6 +505,7 @@ def main() -> None:
         save_every=args.save_every,
         out_dir=Path(args.out),
         seed=args.seed,
+        stop_at=args.stop_at,
         **({"weight_decay": 0.0, "min_lr_ratio": 0.0} if args.overfit else {}),
     )
 
@@ -481,6 +541,12 @@ def main() -> None:
         model, train_loader, val_loader, tcfg, tok, device,
         resume_from=resume_from, metrics_path=metrics_path,
     )
+    if not history["finished"]:
+        # A paused run has no final weights yet; writing final.pt would label half a schedule
+        # as the finished model.
+        print(f"paused; {out / 'latest.pt'} holds the run. Resume with the same arguments "
+              f"plus --resume.")
+        return
 
     checkpoint.save(out / "final.pt", model, step=tcfg.max_steps, cfg=cfg,
                     tokens_seen=history["tokens_seen"])

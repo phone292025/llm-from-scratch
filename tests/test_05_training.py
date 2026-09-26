@@ -382,14 +382,14 @@ def test_load_text_corpus_splits_without_overlap(tmp_path) -> None:
 # --- crash safety ---------------------------------------------------------------------------------
 
 
-def _tiny_run(cfg, ids, out, steps, resume=False, save_every=4):
+def _tiny_run(cfg, ids, out, steps, resume=False, save_every=4, stop_at=None):
     from llm.train import TrainConfig, train
 
     loader = make_dataloader(ids, CTX, CTX, batch_size=2)
     torch.manual_seed(0)
     model = GPTModel(cfg)
     tcfg = TrainConfig(max_steps=steps, warmup_steps=2, eval_every=0, log_every=0, bf16=False,
-                       save_every=save_every, out_dir=out)
+                       save_every=save_every, out_dir=out, stop_at=stop_at)
     history = train(model, loader, None, tcfg, device=torch.device("cpu"), verbose=False,
                     resume_from=out / "latest.pt" if resume else None,
                     metrics_path=out / "metrics.jsonl")
@@ -427,6 +427,97 @@ def test_resume_restores_the_learning_rate_schedule(cfg, ids, tmp_path) -> None:
     # The first resumed step uses step 5's learning rate, not step 0's.
     expected = 3e-4 * lr_at_step(6, warmup_steps=2, total_steps=20)
     assert history["lr"][0] == pytest.approx(expected, rel=1e-6)
+
+
+def test_a_resumed_run_is_identical_to_one_that_never_stopped(cfg, ids, tmp_path) -> None:
+    """The test note 5 promised, and the one whose absence let a real bug through.
+
+    The earlier resume tests checked the step counter and the learning rate. Both were right while
+    the *data* was wrong: every resume restarted the shuffle from batch 0, so the resumed steps
+    retrained on the start of the run. Loss still fell, the counters still matched. Only comparing
+    against a run that never stopped catches that -- same losses, same final weights, bit for bit.
+    """
+    straight, straight_history = _tiny_run(cfg, ids, tmp_path / "straight", steps=14)
+
+    _tiny_run(cfg, ids, tmp_path / "paused", steps=14, stop_at=9)
+    resumed, resumed_history = _tiny_run(cfg, ids, tmp_path / "paused", steps=14, resume=True)
+
+    assert resumed_history["step"] == list(range(9, 14))
+    assert resumed_history["train_loss"] == straight_history["train_loss"][9:]
+    for (name, a), b in zip(straight.state_dict().items(), resumed.state_dict().values()):
+        assert torch.equal(a, b), f"{name} differs after resuming"
+
+
+def test_stop_at_pauses_without_shortening_the_schedule(cfg, ids, tmp_path) -> None:
+    """Stopping at 9 of 14 must leave the learning rate on the 14-step curve.
+
+    Shortening max_steps instead would decay the LR to its floor by step 9, and the resumed half
+    would then run at a schedule the first half never followed.
+    """
+    from llm.optim import lr_at_step
+
+    _, history = _tiny_run(cfg, ids, tmp_path, steps=14, stop_at=9, save_every=0)
+    assert history["step"] == list(range(9))
+    assert not history["finished"]
+    expected = 3e-4 * lr_at_step(9, warmup_steps=2, total_steps=14)
+    assert history["lr"][-1] == pytest.approx(expected, rel=1e-6)
+    # Saved even with save_every=0: stopping without a checkpoint would lose the whole run.
+    assert torch.load(tmp_path / "latest.pt", weights_only=True)["step"] == 8
+
+
+def test_the_batch_stream_visits_every_window_once_per_epoch(ids) -> None:
+    from llm.train import _batch_stream
+
+    loader = make_dataloader(ids, CTX, CTX, batch_size=4)
+    n, per_epoch = len(loader.dataset), len(loader)
+    stream = _batch_stream(loader, seed=0)
+    epochs = [[next(stream) for _ in range(per_epoch)] for _ in range(2)]
+
+    starts = {int(x[0, 0]) * 1000 + int(x[0, 1]) for x, _ in epochs[0]}
+    assert len(starts) == per_epoch, "a batch repeated within one epoch"
+    assert per_epoch * 4 <= n
+    # Shuffled per epoch, not the same order twice.
+    first = [int(x[0, 0]) for x, _ in epochs[0]]
+    second = [int(x[0, 0]) for x, _ in epochs[1]]
+    assert first != second
+
+
+def test_seeking_the_batch_stream_equals_continuing_it(ids) -> None:
+    """Resume is a seek. It has to land exactly where an unbroken stream would be, including
+    across an epoch boundary."""
+    from llm.train import _batch_stream
+
+    loader = make_dataloader(ids, CTX, CTX, batch_size=4)
+    per_epoch = len(loader)
+    unbroken = _batch_stream(loader, seed=3)
+    reference = [next(unbroken) for _ in range(per_epoch + 5)]
+    for start in (0, 7, per_epoch - 1, per_epoch, per_epoch + 2):
+        sought = next(_batch_stream(loader, seed=3, start=start))
+        assert torch.equal(sought[0], reference[start][0]), f"seek to {start} landed elsewhere"
+
+
+def test_a_precomputed_batch_list_is_reshuffled_every_epoch_after_the_first(ids) -> None:
+    """Length-grouped instruction data arrives as a fixed list of batches. The old loop replayed
+    that list in the same order every epoch; now the first epoch keeps it and later ones shuffle
+    the batch order, still visiting every batch exactly once."""
+    from torch.utils.data import DataLoader
+
+    from llm.dataset import SlidingWindowDataset
+    from llm.train import _batch_stream
+
+    dataset = SlidingWindowDataset(ids, CTX, CTX)
+    plan = [[i, i + 1] for i in range(0, 40, 2)]
+    loader = DataLoader(dataset, batch_sampler=plan)
+    stream = _batch_stream(loader, seed=0)
+    epochs = [[next(stream) for _ in plan] for _ in range(2)]
+
+    def order(epoch):
+        return [int(x[0, 0]) for x, _ in epoch]
+
+    expected_first = [int(dataset[b[0]][0][0]) for b in plan]
+    assert order(epochs[0]) == expected_first
+    assert order(epochs[1]) != expected_first
+    assert sorted(order(epochs[1])) == sorted(expected_first)
 
 
 def test_metrics_log_survives_and_prefers_the_latest_record(cfg, ids, tmp_path) -> None:
