@@ -128,6 +128,21 @@ def check_same_data(state: dict, fingerprint: str) -> None:
         )
 
 
+def check_fresh_start(out: Path, resume: bool) -> None:
+    """Refuse to start a new run on top of an existing one.
+
+    A fresh run saves step-000100, step-000200, ... into the same folder, and pruning keeps only
+    the newest two -- so two saves in, the previous run's checkpoints, a finished model included,
+    would be deleted. One mistaken double-click on run.bat instead of resume.bat would do it.
+    """
+    if not resume and find_checkpoint(out) is not None:
+        raise SystemExit(
+            f"{out} already holds a run (newest checkpoint: {find_checkpoint(out)}). Starting a "
+            f"new one here would prune it away. Continue it with --resume, or pass a different "
+            f"--out for a new run."
+        )
+
+
 def load_sources(args, tok, recipe: int = DATA_RECIPE) -> tuple[list[dict], list[dict]]:
     """Gather conversations from every source, then split them by `recipe`.
 
@@ -367,6 +382,7 @@ def main() -> None:
     args = p.parse_args()
 
     out = Path(args.out)
+    check_fresh_start(out, args.resume)
     out.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(args.seed)

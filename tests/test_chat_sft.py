@@ -28,6 +28,7 @@ from llm.chat_sft import (
     DATA_RECIPE,
     HELDOUT_PROMPTS,
     PROBE_PROMPTS,
+    check_fresh_start,
     check_same_data,
     data_fingerprint,
     epoch_batches,
@@ -435,3 +436,13 @@ def test_checkpoints_from_before_the_fingerprint_still_resume() -> None:
 def test_checkpoints_record_their_fingerprint(tmp_path, opt) -> None:
     final = save_checkpoint(tmp_path, FakeAdapter(), opt, 100, "some/base", fingerprint="abc123")
     assert json.loads((final / "state.json").read_text())["data_fingerprint"] == "abc123"
+
+
+def test_a_fresh_run_will_not_start_on_top_of_a_finished_one(tmp_path, opt) -> None:
+    """Pruning keeps the newest two checkpoints, so a new run in an old run's folder would delete
+    the old model two saves in. run.bat instead of resume.bat must not be able to do that."""
+    save_checkpoint(tmp_path, FakeAdapter(), opt, 759, "some/base", finished=True)
+    with pytest.raises(SystemExit, match="--resume"):
+        check_fresh_start(tmp_path, resume=False)
+    check_fresh_start(tmp_path, resume=True)
+    check_fresh_start(tmp_path / "somewhere-new", resume=False)
