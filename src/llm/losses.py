@@ -24,6 +24,9 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
+#: The label cross_entropy ignores by default; instruction data uses it to mask the prompt.
+IGNORE_INDEX = -100
+
 
 def compute_loss(logits: Tensor, targets: Tensor) -> Tensor:
     """Mean cross-entropy over every position in the batch.
@@ -44,6 +47,12 @@ def evaluate(
 ) -> dict[str, float]:
     """Mean loss and perplexity over the loader, in eval mode.
 
+    Weighted by tokens, not by batches. Each batch's loss is already a mean over its own scored
+    positions, so averaging those means gives a short batch -- the last one of a split that does
+    not divide evenly, or a batch of short instruction examples -- the same say as a full one.
+    Every scored token counts once here, which is what "validation loss" is supposed to mean.
+    Positions labelled -100 are skipped, exactly as cross_entropy skips them.
+
     Restores whatever mode the model was in, so calling this mid-training cannot silently leave
     dropout disabled for the rest of the run.
     """
@@ -51,26 +60,31 @@ def evaluate(
     model.eval()
     device = device or next(model.parameters()).device
 
-    total, batches = 0.0, 0
+    total, tokens, batches = 0.0, 0, 0
     try:
         for i, (x, y) in enumerate(loader):
             if max_batches is not None and i >= max_batches:
                 break
-            _, loss = model(x.to(device), targets=y.to(device))
-            total += loss.item()
+            y = y.to(device)
+            _, loss = model(x.to(device), targets=y)
+            scored = int((y != IGNORE_INDEX).sum())
+            if scored:
+                total += loss.item() * scored
+                tokens += scored
             batches += 1
     finally:
         model.train(was_training)
 
-    if batches == 0:
-        return {"loss": float("nan"), "perplexity": float("nan"), "batches": 0}
-    mean = total / batches
+    if tokens == 0:
+        return {"loss": float("nan"), "perplexity": float("nan"), "batches": batches, "tokens": 0}
+    mean = total / tokens
     return {
         "loss": mean,
         # exp overflows to inf above ~709; an untrained model is nowhere near, but a diverged
         # run can be, and inf in a log line is less useful than a large number.
         "perplexity": math.exp(mean) if mean < 700 else float("inf"),
         "batches": batches,
+        "tokens": tokens,
     }
 
 

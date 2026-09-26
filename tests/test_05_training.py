@@ -379,6 +379,41 @@ def test_load_text_corpus_splits_without_overlap(tmp_path) -> None:
     assert abs(len(val_ids) / (len(train_ids) + len(val_ids)) - 0.1) < 0.02
 
 
+def test_evaluate_weights_every_token_equally(model, ids) -> None:
+    """A short final batch must count for its tokens, not for a whole batch.
+
+    Averaging per-batch means gives the 1-row remainder of a split the same weight as a full
+    batch. The honest number is the mean over every scored position.
+    """
+    loader = make_dataloader(ids, CTX, CTX, batch_size=5, shuffle=False, drop_last=False)
+    sizes = [len(x) for x, _ in loader]
+    assert sizes[-1] < sizes[0], "the fixture needs a short final batch to mean anything"
+
+    model.eval()
+    with torch.no_grad():
+        per_token = torch.cat([
+            torch.nn.functional.cross_entropy(model(x).flatten(0, 1), y.flatten(), reduction="none")
+            for x, y in loader
+        ])
+    stats = evaluate(model, loader)
+    assert stats["loss"] == pytest.approx(per_token.mean().item(), rel=1e-5)
+    assert stats["tokens"] == per_token.numel()
+
+
+def test_evaluate_skips_masked_positions() -> None:
+    """Instruction data labels the prompt -100. Those positions must not count as tokens."""
+    from torch.utils.data import DataLoader, TensorDataset
+
+    cfg_ = replace(SMALL, vocab_size=VOCAB, context_length=CTX, emb_dim=32, n_layers=1, n_heads=2)
+    torch.manual_seed(0)
+    m = GPTModel(cfg_)
+    x = torch.randint(0, VOCAB, (3, 8))
+    y = torch.randint(0, VOCAB, (3, 8))
+    y[:, :5] = -100
+    stats = evaluate(m, DataLoader(TensorDataset(x, y), batch_size=2))
+    assert stats["tokens"] == 3 * 3
+
+
 # --- crash safety ---------------------------------------------------------------------------------
 
 
