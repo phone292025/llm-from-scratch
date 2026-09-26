@@ -2,8 +2,18 @@
 #   pip install torch --index-url https://download.pytorch.org/whl/cu128
 torch>=2.7
 tiktoken>=0.7
+# Imported directly by llm.bpe for the \p{L} classes in GPT-2's pre-tokenizer. tiktoken happens
+# to depend on it too, which is the only reason a missing line here went unnoticed.
+regex>=2024.1
 numpy>=1.26
 matplotlib>=3.8
 pytest>=8.0
 safetensors>=0.4
 huggingface_hub>=0.23
+
+# The chat model (llm.chat_sft, llm.chat_infer, scripts/talk.py). Floors are the versions it was
+# built and tested against; the tied-embedding handling in chat_infer depends on peft's
+# behaviour when lm_head is a LoRA target, so older peft is untested rather than known-good.
+transformers>=5.0
+peft>=0.21
+datasets>=5.0
