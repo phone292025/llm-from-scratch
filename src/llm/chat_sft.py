@@ -28,6 +28,7 @@ has 8. LoRA trains ~1% of the weights and the optimizer state shrinks with it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -100,6 +101,31 @@ def split_records(
     train = persona * repeat + external[n:]
     rng.shuffle(train)
     return train, external[:n]
+
+
+def data_fingerprint(train: list[dict], val: list[dict]) -> str:
+    """A short hash of exactly which conversations, in which order, a run trains and validates on."""
+    blob = json.dumps([[r["messages"] for r in train], [r["messages"] for r in val]],
+                      sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def check_same_data(state: dict, fingerprint: str) -> None:
+    """Refuse to resume onto different conversations than the run started with.
+
+    Resume rebuilds the data from its sources, and one of them -- `data/chat/persona.jsonl` -- is
+    a file anyone can edit. Change it mid-run and a resume would carry on, from the right step
+    with the right optimizer state, over a different set of conversations, and nothing would say
+    so. Checkpoints written before this check have no fingerprint and cannot be checked.
+    """
+    expected = state.get("data_fingerprint")
+    if expected and expected != fingerprint:
+        raise SystemExit(
+            f"the training data has changed since this run started (fingerprint {expected}, now "
+            f"{fingerprint}) -- most likely data/chat/persona.jsonl was edited. Resuming would "
+            f"continue on different conversations. Put the file back as it was, or start a fresh "
+            f"run with run.bat."
+        )
 
 
 def load_sources(args, tok, recipe: int = DATA_RECIPE) -> tuple[list[dict], list[dict]]:
@@ -267,7 +293,8 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
 
 
 def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
-                    finished: bool = False, recipe: int = DATA_RECIPE) -> Path:
+                    finished: bool = False, recipe: int = DATA_RECIPE,
+                    fingerprint: str | None = None) -> Path:
     """Write a complete checkpoint into its own directory, then point `latest.json` at it.
 
     A save is 1.1 GB -- the adapter carries the 311M-entry embedding table because lm_head is a
@@ -290,7 +317,8 @@ def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
         rng["cuda"] = torch.cuda.get_rng_state_all()
     torch.save(rng, partial / "rng.pt")
     (partial / "state.json").write_text(
-        json.dumps({"step": step, "base": base, "finished": finished, "data_recipe": recipe}),
+        json.dumps({"step": step, "base": base, "finished": finished, "data_recipe": recipe,
+                    "data_fingerprint": fingerprint}),
         encoding="utf-8")
     if final.exists():
         shutil.rmtree(final)
@@ -356,6 +384,10 @@ def main() -> None:
     kept = " (kept from the run being resumed)" if recipe != DATA_RECIPE else ""
     print(f"data        recipe {recipe}{kept}")
     train_records, val_records = load_sources(args, tok, recipe)
+    fingerprint = data_fingerprint(train_records, val_records)
+    if found is not None:
+        check_same_data(json.loads((found / "state.json").read_text(encoding="utf-8")), fingerprint)
+    print(f"            fingerprint {fingerprint}")
 
     train_data = ChatDataset(train_records, tok, args.max_len)
     val_data = ChatDataset(val_records, tok, args.max_len)
@@ -495,9 +527,11 @@ def main() -> None:
             model.config.use_cache = False
 
         if args.save_every and (step + 1) % args.save_every == 0 and step + 1 < max_steps:
-            save_checkpoint(out, model, opt, step + 1, args.base, recipe=recipe)
+            save_checkpoint(out, model, opt, step + 1, args.base, recipe=recipe,
+                            fingerprint=fingerprint)
 
-    final = save_checkpoint(out, model, opt, max_steps, args.base, finished=True, recipe=recipe)
+    final = save_checkpoint(out, model, opt, max_steps, args.base, finished=True, recipe=recipe,
+                            fingerprint=fingerprint)
     print(f"\ndone in {(time.perf_counter() - t0) / 60:.1f} min -> {final / 'adapter'}")
     print("talk to it:  python scripts/talk.py")
     metrics.close()

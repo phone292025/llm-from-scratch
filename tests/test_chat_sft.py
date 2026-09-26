@@ -28,6 +28,8 @@ from llm.chat_sft import (
     DATA_RECIPE,
     HELDOUT_PROMPTS,
     PROBE_PROMPTS,
+    check_same_data,
+    data_fingerprint,
     epoch_batches,
     init_chat_tokens,
     oasst_conversations,
@@ -403,3 +405,33 @@ def test_heldout_probes_cover_what_the_seen_ones_do() -> None:
     assert any(len(p) > 1 for p in HELDOUT_PROMPTS), "one must test memory across turns"
     assert asks(HELDOUT_PROMPTS, "remember") or asks(HELDOUT_PROMPTS, "who")
     assert asks(HELDOUT_PROMPTS, "name")
+
+
+# --- resuming onto the same data -----------------------------------------------------------------
+
+
+def test_the_fingerprint_notices_a_one_character_edit(sources) -> None:
+    persona, external = sources
+    train, val = split_records(persona, external, repeat=25, val_size=40, seed=0)
+    edited = [dict(r) for r in persona]
+    edited[3] = _conv("persona 3.")
+    train2, val2 = split_records(edited, external, repeat=25, val_size=40, seed=0)
+    assert data_fingerprint(train, val) == data_fingerprint(*split_records(
+        persona, external, repeat=25, val_size=40, seed=0))
+    assert data_fingerprint(train, val) != data_fingerprint(train2, val2)
+
+
+def test_resuming_onto_edited_data_is_refused() -> None:
+    """Editing persona.jsonl mid-run must stop a resume, not quietly change the run's data."""
+    with pytest.raises(SystemExit, match="persona.jsonl"):
+        check_same_data({"data_fingerprint": "aaaa"}, "bbbb")
+    check_same_data({"data_fingerprint": "aaaa"}, "aaaa")
+
+
+def test_checkpoints_from_before_the_fingerprint_still_resume() -> None:
+    check_same_data({"step": 200}, "anything")
+
+
+def test_checkpoints_record_their_fingerprint(tmp_path, opt) -> None:
+    final = save_checkpoint(tmp_path, FakeAdapter(), opt, 100, "some/base", fingerprint="abc123")
+    assert json.loads((final / "state.json").read_text())["data_fingerprint"] == "abc123"
