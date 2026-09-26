@@ -30,7 +30,7 @@ from torch import nn
 
 from llm.chat_data import IM_END
 
-REPLACEMENT = "�"
+REPLACEMENT = "\ufffd"
 
 
 class ReplyStreamer:

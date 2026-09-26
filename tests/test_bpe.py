@@ -305,7 +305,7 @@ def test_round_trip_is_exact(trained: Tokenizer, text: str) -> None:
 def test_decode_replaces_malformed_utf8(trained: Tokenizer) -> None:
     # A lone continuation byte is not valid UTF-8 on its own.
     lone = trained._byte_to_id[bytes([0x80])]
-    assert trained.decode([lone]) == "�"
+    assert trained.decode([lone]) == "\ufffd"
 
 
 def test_trained_tokenizer_compresses_its_own_corpus(trained: Tokenizer, corpus: str) -> None:

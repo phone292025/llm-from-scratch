@@ -89,8 +89,11 @@ class Chat:
             produced.append(token)
 
             # Decode the whole tail each time and print only what is new. Decoding one token at a
-            # time would break any character whose UTF-8 bytes span two tokens.
-            full = self.tok.decode(produced)
+            # time would break any character whose UTF-8 bytes span two tokens -- and so would
+            # printing a half-finished one: it decodes to U+FFFD, and once that is on screen the
+            # completed character is the same length and never replaces it. GPT-2 splits the
+            # curly apostrophe that way, so "don't" came out as "don\ufffdt". Hold it back.
+            full = self.tok.decode(produced).rstrip("\ufffd")
             print(full[len(shown) :], end="", flush=True)
             shown = full
 
