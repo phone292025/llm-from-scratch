@@ -95,6 +95,12 @@ def find_chunk_boundaries(path: str | Path, n_chunks: int, split_token: bytes) -
                 if found != -1:
                     guesses[i] = pos + found
                     break
+                if len(block) < window:
+                    # A short read means the end of the file: no separator follows this guess.
+                    # Without this check the step-back below re-reads the last few bytes forever
+                    # -- any corpus whose final document outran one chunk hung here silently.
+                    guesses[i] = size
+                    break
                 # Step back by the token length so a token straddling two reads is still found.
                 pos += len(block) - len(split_token) + 1
                 f.seek(pos)
