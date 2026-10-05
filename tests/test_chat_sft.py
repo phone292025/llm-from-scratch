@@ -401,15 +401,27 @@ def test_checkpoints_record_their_recipe(tmp_path, opt) -> None:
     assert json.loads((final / "state.json").read_text())["data_recipe"] == 1
 
 
+#: Every file of hand-written training data: the chat conversations and the DPO preference pairs.
+HAND_WRITTEN = ["data/chat/persona.jsonl", "data/chat/preferences.jsonl"]
+
+
+def trained_texts(normal) -> set[str]:
+    """Every turn, chosen answer and rejected answer in the hand-written data, normalized."""
+    texts = set()
+    for path in HAND_WRITTEN:
+        for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                texts |= {normal(m["content"]) for m in row["messages"]}
+                texts |= {normal(row[k]) for k in ("chosen", "rejected") if k in row}
+    return texts
+
+
 def test_heldout_probes_are_not_in_the_training_data() -> None:
     """They exist to show whether a behaviour generalized. The moment one is copied into the
     hand-written data it measures recall instead, like every original probe does."""
     normal = lambda t: " ".join(t.lower().split())
-    trained = set()
-    path = pathlib.Path("data/chat/persona.jsonl")
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            trained |= {normal(m["content"]) for m in json.loads(line)["messages"]}
+    trained = trained_texts(normal)
     for convo in HELDOUT_PROMPTS:
         for turn in convo:
             if turn["role"] == "user":
@@ -588,10 +600,7 @@ def test_the_knowledge_quiz_is_not_in_the_training_data() -> None:
     def normal(text):
         return " ".join(text.lower().replace("?", "").split())
 
-    trained = set()
-    for line in pathlib.Path("data/chat/persona.jsonl").read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            trained |= {normal(m["content"]) for m in json.loads(line)["messages"]}
+    trained = trained_texts(normal)
     asked = [turn for _, turns, _ in quiz.TESTS for turn in turns]
     copied = [q for q in asked if normal(q) in trained]
     assert not copied, f"quiz questions found in the training data: {copied}"
