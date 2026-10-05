@@ -629,3 +629,25 @@ def test_chat_validation_loss_is_the_mean_over_graded_tokens(tiny_base) -> None:
     got = evaluate(model, batches, data, tok.pad_token_id, "cpu", limit=len(batches))
     assert got == pytest.approx(total / count, rel=1e-5)
     assert model.training, "evaluate must hand the model back in training mode"
+
+
+def test_the_knowledge_quiz_is_not_in_the_training_data() -> None:
+    """scripts/knowledge_check.py measures what the model knows and whether it admits what it
+    does not. If one of its questions is copied into the hand-written training data -- easy to do
+    when writing honesty examples aimed at exactly its failures -- that question measures recall."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("knowledge_check", "scripts/knowledge_check.py")
+    quiz = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(quiz)
+
+    def normal(text):
+        return " ".join(text.lower().replace("?", "").split())
+
+    trained = set()
+    for line in pathlib.Path("data/chat/persona.jsonl").read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            trained |= {normal(m["content"]) for m in json.loads(line)["messages"]}
+    asked = [turn for _, turns, _ in quiz.TESTS for turn in turns]
+    copied = [q for q in asked if normal(q) in trained]
+    assert not copied, f"quiz questions found in the training data: {copied}"
