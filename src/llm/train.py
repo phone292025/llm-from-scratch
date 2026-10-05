@@ -497,14 +497,17 @@ def main() -> None:
         shuffle=False, drop_last=False,
     )
 
+    # Decided here, not by passing the keywords a second time: TrainConfig(weight_decay=..., **{
+    # "weight_decay": 0.0}) is a TypeError, so --overfit used to crash before the first step.
+    overfit = {"weight_decay": 0.0, "min_lr_ratio": 0.0} if args.overfit else {}
     tcfg = TrainConfig(
         lr=args.lr,
         batch_size=args.batch_size,
         accum_steps=args.accum,
         max_steps=args.steps,
         warmup_steps=args.warmup,
-        min_lr_ratio=args.min_lr_ratio,
-        weight_decay=args.weight_decay,
+        min_lr_ratio=overfit.get("min_lr_ratio", args.min_lr_ratio),
+        weight_decay=overfit.get("weight_decay", args.weight_decay),
         eval_every=args.eval_every,
         eval_batches=args.eval_batches,
         sample_every=args.sample_every,
@@ -513,7 +516,6 @@ def main() -> None:
         out_dir=Path(args.out),
         seed=args.seed,
         stop_at=args.stop_at,
-        **({"weight_decay": 0.0, "min_lr_ratio": 0.0} if args.overfit else {}),
     )
 
     device = torch.device("cpu") if args.cpu else pick_device()

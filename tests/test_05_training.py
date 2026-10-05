@@ -648,3 +648,19 @@ def test_the_train_command_refuses_a_tokenizer_that_does_not_fit_the_preset(
                                       "--out", str(tmp_path / "o"), "--cpu"])
     with pytest.raises(SystemExit, match="expects"):
         main()
+
+
+def test_the_overfit_flag_runs_with_no_decay_and_no_learning_rate_floor(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """--overfit is the correctness run in this module's own docstring, and it crashed on startup:
+    the two settings it overrides were passed to TrainConfig twice. A type checker found it."""
+    from llm.optim import lr_at_step
+    from llm.train import read_metrics
+
+    _train_cli(tmp_path, monkeypatch, tmp_path / "overfit", "--overfit")
+    assert "overfit" in capsys.readouterr().out
+    last = read_metrics(tmp_path / "overfit" / "metrics.jsonl")["lr"][-1]
+    # With the 10% floor removed the schedule ends at zero, not at a tenth of the peak.
+    assert last == pytest.approx(3e-4 * lr_at_step(5, warmup_steps=1, total_steps=6, min_lr_ratio=0.0))
+    assert last < 3e-4 * 0.1
