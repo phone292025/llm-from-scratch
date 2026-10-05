@@ -8,6 +8,10 @@ regex>=2024.1
 numpy>=1.26
 matplotlib>=3.8
 pytest>=8.0
+# Development: `ruff check src scripts tests` and
+# `pytest tests --cov=llm --cov-report=term-missing` -- see docs/TESTING.md.
+ruff>=0.6
+pytest-cov>=5.0
 safetensors>=0.4
 huggingface_hub>=0.23
 

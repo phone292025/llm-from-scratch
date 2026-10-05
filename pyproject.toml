@@ -12,3 +12,18 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Rules that find bugs, not rules about taste. F: undefined names, unused imports. E9: syntax
+# errors. B: likely bugs -- zip() silently truncating mismatched lengths, unused loop variables,
+# mutable defaults. PLE: errors pylint is sure of. I: import order, which the project already
+# followed almost everywhere.
+select = ["F", "E9", "B", "PLE", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["llm"]
+

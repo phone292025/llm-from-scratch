@@ -17,3 +17,6 @@ runs/
 *.pth
 *.safetensors
 .pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/

@@ -38,6 +38,15 @@ from llm.chat_sft import (
     split_records,
 )
 
+# peft warns whenever a tied model has lm_head in its adapter. The end-to-end tests below train
+# exactly that, on purpose -- it is the configuration init_chat_tokens requires -- so the notices
+# are expected. Filtered by message, so any other warning still shows.
+pytestmark = [
+    pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`:UserWarning"),
+    pytest.mark.filterwarnings("ignore:Model with `tie_word_embeddings=True`:UserWarning"),
+    pytest.mark.filterwarnings("ignore:Setting `save_embedding_layers` to `True`:UserWarning"),
+]
+
 VOCAB, DIM = 64, 8
 TRAINED_NORM = 1.6
 UNTRAINED_NORM = 0.37

@@ -33,5 +33,9 @@ jobs:
           grep -v '^torch' requirements.txt | pip install -r /dev/stdin
           pip install -e .
 
+      # Before the tests: it takes a second, and it catches the bugs no test was written for.
+      - name: Lint
+        run: ruff check src scripts tests
+
       - name: Run tests
         run: pytest tests/ -v --tb=short
