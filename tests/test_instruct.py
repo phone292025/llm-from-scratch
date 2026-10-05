@@ -169,3 +169,58 @@ def test_split_holds_out_the_requested_size_and_shuffles(records: list[dict]) ->
     assert val != records[:10]
     instructions = {r["instruction"] for r in train}
     assert not instructions & {r["instruction"] for r in val}
+
+
+# --- the fine-tune command, end to end --------------------------------------------------------
+
+
+def test_the_sft_command_fine_tunes_a_checkpoint_end_to_end(tmp_path, monkeypatch) -> None:
+    """python -m llm.sft wires data, model and the training loop together, and until now no test
+    ran it. A tiny model and a tiny BPE stand in for GPT-2 (whose weights CI does not download):
+    --from-checkpoint is the path for fine-tuning your own pretrained model."""
+    import json
+    import sys
+    from dataclasses import replace
+
+    from llm import checkpoint
+    from llm.bpe import EOT, Tokenizer, train_bpe
+    from llm.config import SMALL
+    from llm.model import GPTModel
+    from llm.sft import main
+
+    records = [{"instruction": f"Add {i} and {i + 1}.", "input": "", "output": f"{2 * i + 1}"}
+               for i in range(24)]
+    data = tmp_path / "alpaca.json"
+    data.write_text(json.dumps(records), encoding="utf-8")
+
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text(EOT.join(build_prompt(r["instruction"]) + r["output"] for r in records),
+                      encoding="utf-8")
+    vocab, merges = train_bpe(corpus, 300, [EOT])
+    tok_path = Tokenizer(vocab, merges, [EOT]).save(tmp_path / "tok.json")
+
+    cfg = replace(SMALL, vocab_size=len(vocab), context_length=256, emb_dim=32, n_layers=1,
+                  n_heads=2)
+    torch.manual_seed(0)
+    base = checkpoint.save(tmp_path / "base.pt", GPTModel(cfg), cfg=cfg)
+
+    out = tmp_path / "run"
+    monkeypatch.setattr(sys, "argv", [
+        "sft", "--data", str(data), "--from-checkpoint", str(base), "--tokenizer", str(tok_path),
+        "--epochs", "1", "--batch-size", "4", "--accum", "1", "--max-len", "256", "--val-size", "4",
+        "--eval-every", "2", "--save-every", "2", "--out", str(out), "--cpu"])
+    main()
+
+    final = torch.load(out / "final.pt", weights_only=True)
+    assert final["instruct"] is True and final["cfg"]["vocab_size"] == len(vocab)
+    assert (out / "metrics.jsonl").exists() and (out / "latest.pt").exists()
+
+
+def test_the_sft_command_says_when_max_len_leaves_no_answer() -> None:
+    """When every example's answer is truncated away, say so -- not "no batches" from deep inside
+    the training loop, which points at the wrong cause."""
+    from llm.sft import build_loaders
+
+    records = [{"instruction": "Explain " + "this " * 50, "input": "", "output": "ok"}] * 8
+    with pytest.raises(SystemExit, match="--max-len"):
+        build_loaders(records, FakeTokenizer(), batch_size=2, max_len=32, val_size=2)

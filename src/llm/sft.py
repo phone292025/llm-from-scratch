@@ -42,6 +42,13 @@ def build_loaders(
     pad = partial(collate, pad_id=tok.eot_id)
     train_set = InstructionDataset(train_records, tok, max_len)
     val_set = InstructionDataset(val_records, tok, max_len)
+    if not train_set:
+        # Otherwise this surfaces deep in the training loop as "no batches", pointing at the wrong
+        # cause. The prompt template alone is ~40 tokens, so a small --max-len can drop everything.
+        raise SystemExit(
+            f"none of the {len(train_records):,} training examples has any of its answer left "
+            f"within --max-len {max_len}; the prompt fills the window. Raise --max-len."
+        )
     return (
         DataLoader(
             train_set,

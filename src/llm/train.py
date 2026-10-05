@@ -148,7 +148,10 @@ def _batch_stream(loader: DataLoader, seed: int, start: int = 0):
 
     per_epoch = len(epoch_batches(0))
     if per_epoch == 0:
-        raise ValueError("the training loader yields no batches -- the corpus is smaller than one")
+        raise ValueError(
+            "the training loader yields no batches -- the data is smaller than one batch, or every "
+            "example was dropped before batching"
+        )
     epoch, offset = divmod(start, per_epoch)
     while True:
         for indices in epoch_batches(epoch)[offset:]:

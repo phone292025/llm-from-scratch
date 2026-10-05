@@ -600,3 +600,32 @@ def test_the_loaded_chat_model_computes_what_was_trained(finished_run, tiny_base
             add_special_tokens=False).input_ids
     with torch.no_grad():
         assert torch.allclose(merged(x).logits, trained(x).logits, atol=1e-5)
+
+
+def test_chat_validation_loss_is_the_mean_over_graded_tokens(tiny_base) -> None:
+    """The end-to-end runs have no validation set (no external data offline), so evaluate()'s
+    scoring loop never ran in a test. Checked here against the definition: every graded token
+    counts once, prompts and padding not at all."""
+    import torch.nn.functional as F
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from llm.chat_data import IGNORE, ChatDataset, collate
+    from llm.chat_sft import evaluate
+
+    tok = AutoTokenizer.from_pretrained(tiny_base)
+    model = AutoModelForCausalLM.from_pretrained(tiny_base, dtype=torch.float32)
+    data = ChatDataset([{"messages": c} for c in PERSONA], tok, 96)
+    batches = length_grouped_batches(data, 2, seed=0)
+
+    total, count = 0.0, 0
+    with torch.no_grad():
+        for batch in batches:
+            x, y = collate([data[i] for i in batch], tok.pad_token_id)
+            logits = model(input_ids=x).logits
+            total += F.cross_entropy(logits.flatten(0, 1), y.flatten(), ignore_index=IGNORE,
+                                     reduction="sum").item()
+            count += int((y != IGNORE).sum())
+
+    got = evaluate(model, batches, data, tok.pad_token_id, "cpu", limit=len(batches))
+    assert got == pytest.approx(total / count, rel=1e-5)
+    assert model.training, "evaluate must hand the model back in training mode"
