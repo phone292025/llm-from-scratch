@@ -35,6 +35,7 @@ import os
 import random
 import shutil
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -42,6 +43,7 @@ import torch.nn.functional as F
 
 from llm.chat_data import IGNORE, ChatDataset, collate, length_grouped_batches, render
 from llm.chat_infer import find_checkpoint
+from llm.optim import lr_at_step
 
 BASE_MODEL = "Qwen/Qwen3-1.7B-Base"
 
@@ -350,10 +352,21 @@ def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
     return final
 
 
-def main() -> None:
-    from peft import LoraConfig, get_peft_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+@dataclass
+class RunData:
+    """The conversations a run trains and validates on, fixed for the life of the run."""
 
+    train: ChatDataset
+    val: ChatDataset
+    recipe: int
+    fingerprint: str
+
+
+def _state(checkpoint: Path) -> dict:
+    return json.loads((checkpoint / "state.json").read_text(encoding="utf-8"))
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base", default=BASE_MODEL)
     p.add_argument("--out", default="checkpoints/chat")
@@ -380,40 +393,40 @@ def main() -> None:
     p.add_argument("--device", default=None, help="cuda or cpu; default cuda when available")
     p.add_argument("--no-grad-checkpointing", action="store_true",
                    help="faster, more memory: recomputing activations costs ~30% of throughput")
-    args = p.parse_args()
+    return p.parse_args(argv)
 
-    out = Path(args.out)
-    check_fresh_start(out, args.resume)
-    out.mkdir(parents=True, exist_ok=True)
-    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    torch.manual_seed(args.seed)
 
-    tok = AutoTokenizer.from_pretrained(args.base)
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
+def prepare_data(args: argparse.Namespace, tok, found: Path | None) -> RunData:
+    """The run's conversations -- for a resumed run, exactly the ones it started with.
 
-    print(f"base        {args.base}")
-    # Found before the data is built: a resumed run must rebuild the data it started with.
-    found = find_checkpoint(out) if args.resume else None
-    recipe = DATA_RECIPE
-    if found is not None:
-        recipe = json.loads((found / "state.json").read_text(encoding="utf-8")).get("data_recipe", 1)
+    The split recipe is read from the checkpoint before anything is built, and the result is
+    fingerprinted and compared with the checkpoint's, so a resume can neither change how the data
+    is split nor carry on over conversations edited in the meantime.
+    """
+    recipe = _state(found).get("data_recipe", 1) if found is not None else DATA_RECIPE
     kept = " (kept from the run being resumed)" if recipe != DATA_RECIPE else ""
     print(f"data        recipe {recipe}{kept}")
     train_records, val_records = load_sources(args, tok, recipe)
     fingerprint = data_fingerprint(train_records, val_records)
     if found is not None:
-        check_same_data(json.loads((found / "state.json").read_text(encoding="utf-8")), fingerprint)
+        check_same_data(_state(found), fingerprint)
     print(f"            fingerprint {fingerprint}")
 
-    train_data = ChatDataset(train_records, tok, args.max_len)
-    val_data = ChatDataset(val_records, tok, args.max_len)
-    tokens = sum(len(ids) for ids, _ in train_data.examples)
-    graded = sum(sum(1 for t in labels if t != IGNORE) for _, labels in train_data.examples)
-    print(f"train       {len(train_data):,} conversations, {tokens:,} tokens "
+    train = ChatDataset(train_records, tok, args.max_len)
+    val = ChatDataset(val_records, tok, args.max_len)
+    tokens = sum(len(ids) for ids, _ in train.examples)
+    graded = sum(sum(1 for t in labels if t != IGNORE) for _, labels in train.examples)
+    print(f"train       {len(train):,} conversations, {tokens:,} tokens "
           f"({graded:,} graded, {graded / max(tokens, 1):.0%})")
-    print(f"val         {len(val_data):,} conversations")
-    print(f"dropped     {train_data.dropped + val_data.dropped:,} unusable rows")
+    print(f"val         {len(val):,} conversations")
+    print(f"dropped     {train.dropped + val.dropped:,} unusable rows")
+    return RunData(train, val, recipe, fingerprint)
+
+
+def build_model(args: argparse.Namespace, tok, device: str):
+    """The base model with its ChatML markers seeded, wrapped for LoRA."""
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM
 
     # bf16 on the GPU, where it halves memory at no cost in quality. On the CPU, fp32: most CPUs
     # have no bf16 matrix units, so bf16 there is slower and only less accurate.
@@ -445,116 +458,161 @@ def main() -> None:
     total = sum(p.numel() for p in model.parameters())
     print(f"lora        r={args.lora_r} alpha={args.lora_alpha}; "
           f"{trainable:,} trainable of {total:,} ({trainable / total:.2%})")
+    return model
 
-    batches = length_grouped_batches(train_data, args.batch_size, seed=args.seed)
-    val_batches = length_grouped_batches(val_data, args.batch_size, seed=args.seed)
-    steps_per_epoch = max(1, len(batches) // args.accum)
-    max_steps = int(steps_per_epoch * args.epochs)
+
+def schedule_length(args: argparse.Namespace, data: RunData) -> int:
+    """Optimizer steps in the run: every conversation `epochs` times, batch_size x accum a step."""
+    per_epoch = math.ceil(len(data.train) / args.batch_size)
+    return int(max(1, per_epoch // args.accum) * args.epochs)
+
+
+def restore(found: Path, out: Path, model, opt, device: str) -> int:
+    """Load a checkpoint's adapter, optimizer state and random state. Returns the step it reached."""
+    from peft import set_peft_model_state_dict
+    from safetensors.torch import load_file
+
+    loaded = set_peft_model_state_dict(model, load_file(found / "adapter" / "adapter_model.safetensors"))
+    if loaded.unexpected_keys:
+        # A partial load would carry on from half-fresh weights while claiming to resume.
+        raise SystemExit(f"adapter at {found} does not fit this model: "
+                         f"{loaded.unexpected_keys[:3]} ...")
+    step = _state(found)["step"]
+    opt.load_state_dict(torch.load(found / "optimizer.pt", map_location=device))
+    if (found / "rng.pt").exists():
+        rng = torch.load(found / "rng.pt")
+        torch.set_rng_state(rng["cpu"])
+        if "cuda" in rng and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(rng["cuda"])
+    where = found.name if found != out else "original layout"
+    print(f"resumed     from step {step} ({where})")
+    return step
+
+
+def print_samples(model, tok) -> None:
+    """The probe prompts' answers -- memorized and never seen -- side by side in the log."""
+    model.config.use_cache = True
+    for label, prompts in (("seen in training", PROBE_PROMPTS), ("never seen", HELDOUT_PROMPTS)):
+        print(f"    -- {label} --")
+        for messages in prompts:
+            print(f"    > {messages[-1]['content']}\n      {sample(model, tok, messages)}",
+                  flush=True)
+    model.config.use_cache = False
+
+
+def run_training(args: argparse.Namespace, model, opt, tok, data: RunData, out: Path,
+                 device: str, start_step: int, max_steps: int) -> Path:
+    """Optimizer steps from `start_step` to `max_steps`, logging, evaluating, sampling and saving
+    on their schedules. Returns the final checkpoint's directory."""
+
+    def lr_at(step: int) -> float:
+        # The same warmup-then-cosine schedule as pretraining (notes/05), floored at 10% of peak.
+        return args.lr * lr_at_step(step, warmup_steps=args.warmup, total_steps=max_steps,
+                                    min_lr_ratio=0.1)
+
+    val_batches = length_grouped_batches(data.val, args.batch_size, seed=args.seed)
+    # Where the run is in the data is arithmetic on the step, so resuming is a seek.
+    epoch, cursor = divmod(start_step * args.accum, math.ceil(len(data.train) / args.batch_size))
+    batches = epoch_batches(data.train, args.batch_size, args.seed, epoch)
+    pad_id = tok.pad_token_id
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    model.train()
+    t0 = time.perf_counter()
+    seen = 0
+
+    with (out / "metrics.jsonl").open("a", encoding="utf-8") as metrics:
+
+        def record(**fields) -> None:
+            metrics.write(json.dumps(fields) + "\n")
+            metrics.flush()
+
+        for step in range(start_step, max_steps):
+            for group in opt.param_groups:
+                group["lr"] = lr_at(step)
+
+            running = 0.0
+            for _ in range(args.accum):
+                if cursor >= len(batches):           # next epoch: its own order, from (seed, epoch)
+                    epoch += 1
+                    batches = epoch_batches(data.train, args.batch_size, args.seed, epoch)
+                    cursor = 0
+                x, y = collate([data.train[i] for i in batches[cursor]], pad_id)
+                cursor += 1
+                x, y = x.to(device), y.to(device)
+                seen += int((y != IGNORE).sum())
+
+                logits = model(input_ids=x).logits
+                # The loss is computed here rather than by passing `labels=` to the model, because
+                # chat_data already shifted them. Letting transformers shift again would train the
+                # model to predict the token it is reading -- and the loss would still fall.
+                loss = F.cross_entropy(logits.flatten(0, 1).float(), y.flatten(), ignore_index=IGNORE)
+                if torch.isnan(loss):
+                    continue                          # a batch with nothing graded; skip it
+                (loss / args.accum).backward()
+                running += loss.item() / args.accum
+
+            torch.nn.utils.clip_grad_norm_(trainable, 1.0)
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+
+            if step % 10 == 0 or step == max_steps - 1:
+                rate = seen / (time.perf_counter() - t0)
+                print(f"  step {step:>5}  loss {running:7.4f}  lr {lr_at(step):.2e}  "
+                      f"{rate:>8,.0f} graded tok/s", flush=True)
+                record(kind="train", step=step, loss=running, lr=lr_at(step))
+
+            if args.eval_every and (step + 1) % args.eval_every == 0:
+                val = evaluate(model, val_batches, data.val, pad_id, device, limit=args.val_batches)
+                print(f"    val loss {val:.4f}   perplexity {math.exp(val):.2f}", flush=True)
+                record(kind="eval", step=step, loss=val)
+
+            if args.sample_every and (step + 1) % args.sample_every == 0:
+                print_samples(model, tok)
+
+            if args.save_every and (step + 1) % args.save_every == 0 and step + 1 < max_steps:
+                save_checkpoint(out, model, opt, step + 1, args.base, recipe=data.recipe,
+                                fingerprint=data.fingerprint)
+
+    final = save_checkpoint(out, model, opt, max_steps, args.base, finished=True,
+                            recipe=data.recipe, fingerprint=data.fingerprint)
+    print(f"\ndone in {(time.perf_counter() - t0) / 60:.1f} min -> {final / 'adapter'}")
+    return final
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Six steps: arguments, the run's data, the model, the schedule, any checkpoint, the loop."""
+    from transformers import AutoTokenizer
+
+    args = parse_args(argv)
+    out = Path(args.out)
+    check_fresh_start(out, args.resume)
+    out.mkdir(parents=True, exist_ok=True)
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(args.seed)
+
+    tok = AutoTokenizer.from_pretrained(args.base)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    print(f"base        {args.base}")
+
+    # Found before the data is built: a resumed run must rebuild the data it started with.
+    found = find_checkpoint(out) if args.resume else None
+    data = prepare_data(args, tok, found)
+    model = build_model(args, tok, device)
+    max_steps = schedule_length(args, data)
     print(f"schedule    {max_steps:,} optimizer steps "
           f"({args.batch_size}x{args.accum} = {args.batch_size * args.accum} conversations each)")
 
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                             lr=args.lr, weight_decay=0.0, betas=(0.9, 0.95))
-
-    def lr_at(step: int) -> float:
-        if step < args.warmup:
-            return args.lr * (step + 1) / args.warmup
-        progress = (step - args.warmup) / max(1, max_steps - args.warmup)
-        return args.lr * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(progress, 1.0))))
-
     start_step = 0
     if args.resume and found is None:
         print("resumed     nothing to resume in " + str(out) + " -- starting from step 0")
     if found is not None:
-        from peft import set_peft_model_state_dict
-        from safetensors.torch import load_file
+        start_step = restore(found, out, model, opt, device)
 
-        loaded = set_peft_model_state_dict(model, load_file(found / "adapter" / "adapter_model.safetensors"))
-        if loaded.unexpected_keys:
-            # A partial load would carry on from half-fresh weights while claiming to resume.
-            raise SystemExit(f"adapter at {found} does not fit this model: "
-                             f"{loaded.unexpected_keys[:3]} ...")
-        start_step = json.loads((found / "state.json").read_text(encoding="utf-8"))["step"]
-        opt.load_state_dict(torch.load(found / "optimizer.pt", map_location=device))
-        if (found / "rng.pt").exists():
-            rng = torch.load(found / "rng.pt")
-            torch.set_rng_state(rng["cpu"])
-            if "cuda" in rng and torch.cuda.is_available():
-                torch.cuda.set_rng_state_all(rng["cuda"])
-        where = found.name if found != out else "original layout"
-        print(f"resumed     from step {start_step} ({where})")
-
-    metrics = (out / "metrics.jsonl").open("a", encoding="utf-8")
-    pad_id = tok.pad_token_id
-    model.train()
-    t0 = time.perf_counter()
-    # Where the run is in the data is arithmetic on the step, so resuming is a seek.
-    epoch, cursor = divmod(start_step * args.accum, len(batches))
-    batches = epoch_batches(train_data, args.batch_size, args.seed, epoch)
-    seen = 0
-
-    for step in range(start_step, max_steps):
-        for group in opt.param_groups:
-            group["lr"] = lr_at(step)
-
-        running = 0.0
-        for _ in range(args.accum):
-            if cursor >= len(batches):           # next epoch: its own order, from (seed, epoch)
-                epoch += 1
-                batches = epoch_batches(train_data, args.batch_size, args.seed, epoch)
-                cursor = 0
-            x, y = collate([train_data[i] for i in batches[cursor]], pad_id)
-            cursor += 1
-            x, y = x.to(device), y.to(device)
-            seen += int((y != IGNORE).sum())
-
-            logits = model(input_ids=x).logits
-            # The loss is computed here rather than by passing `labels=` to the model, because
-            # chat_data already shifted them. Letting transformers shift again would train the
-            # model to predict the token it is currently reading -- and the loss would still fall.
-            loss = F.cross_entropy(logits.flatten(0, 1).float(), y.flatten(), ignore_index=IGNORE)
-            if torch.isnan(loss):
-                continue                          # a batch with nothing graded; skip it
-            (loss / args.accum).backward()
-            running += loss.item() / args.accum
-
-        torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
-        opt.step()
-        opt.zero_grad(set_to_none=True)
-
-        if step % 10 == 0 or step == max_steps - 1:
-            rate = seen / (time.perf_counter() - t0)
-            print(f"  step {step:>5}  loss {running:7.4f}  lr {lr_at(step):.2e}  "
-                  f"{rate:>8,.0f} graded tok/s", flush=True)
-            metrics.write(json.dumps({"kind": "train", "step": step, "loss": running,
-                                      "lr": lr_at(step)}) + "\n")
-            metrics.flush()
-
-        if args.eval_every and (step + 1) % args.eval_every == 0:
-            val = evaluate(model, val_batches, val_data, pad_id, device, limit=args.val_batches)
-            print(f"    val loss {val:.4f}   perplexity {math.exp(val):.2f}", flush=True)
-            metrics.write(json.dumps({"kind": "eval", "step": step, "loss": val}) + "\n")
-            metrics.flush()
-
-        if args.sample_every and (step + 1) % args.sample_every == 0:
-            model.config.use_cache = True
-            for label, prompts in (("seen in training", PROBE_PROMPTS),
-                                   ("never seen", HELDOUT_PROMPTS)):
-                print(f"    -- {label} --")
-                for messages in prompts:
-                    print(f"    > {messages[-1]['content']}\n      {sample(model, tok, messages)}",
-                          flush=True)
-            model.config.use_cache = False
-
-        if args.save_every and (step + 1) % args.save_every == 0 and step + 1 < max_steps:
-            save_checkpoint(out, model, opt, step + 1, args.base, recipe=recipe,
-                            fingerprint=fingerprint)
-
-    final = save_checkpoint(out, model, opt, max_steps, args.base, finished=True, recipe=recipe,
-                            fingerprint=fingerprint)
-    print(f"\ndone in {(time.perf_counter() - t0) / 60:.1f} min -> {final / 'adapter'}")
+    run_training(args, model, opt, tok, data, out, device, start_step, max_steps)
     print("talk to it:  python scripts/talk.py")
-    metrics.close()
 
 
 if __name__ == "__main__":

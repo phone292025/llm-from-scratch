@@ -155,16 +155,25 @@ def test_ordinary_tokens_are_untouched(tok) -> None:
     assert torch.equal(model.emb.weight[:60], before)
 
 
-def test_lora_targets_the_output_head() -> None:
+def test_lora_targets_the_output_head(tiny_base) -> None:
     """The other half of the fix. Seeding gives the markers a sensible starting vector; without
     `lm_head` in the LoRA targets, nothing can move them afterwards, because Qwen3 ties its
-    embeddings and the base weight is frozen."""
-    import inspect
+    embeddings and the base weight is frozen.
 
-    from llm import chat_sft
+    Checked on the model build_model actually returns. An earlier version searched main()'s
+    source text for "lm_head", which broke the moment the configuration moved to another function
+    -- while the model itself was unchanged."""
+    import argparse
 
-    source = inspect.getsource(chat_sft.main)
-    assert '"lm_head"' in source, "lm_head must be a LoRA target or the model cannot learn to stop"
+    from transformers import AutoTokenizer
+
+    from llm.chat_sft import build_model
+
+    args = argparse.Namespace(base=str(tiny_base), lora_r=4, lora_alpha=8, no_grad_checkpointing=True)
+    model = build_model(args, AutoTokenizer.from_pretrained(tiny_base), "cpu")
+    head = model.get_output_embeddings()
+    assert hasattr(head, "lora_A"), "lm_head must be a LoRA target or the model cannot learn to stop"
+    assert any(p.requires_grad for p in head.parameters())
 
 
 # --- the rest -----------------------------------------------------------------------------------
