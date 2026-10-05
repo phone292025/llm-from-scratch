@@ -466,85 +466,6 @@ def test_a_fresh_run_will_not_start_on_top_of_a_finished_one(tmp_path, opt) -> N
     check_fresh_start(tmp_path / "somewhere-new", resume=False)
 
 
-# --- the whole training command, end to end, on a model small enough for the CPU ---------------
-
-PERSONA = [
-    [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hey! What's up?"}],
-    [{"role": "user", "content": "what sup"},
-     {"role": "assistant", "content": "Not much. What's up with you?"}],
-    [{"role": "user", "content": "my name is Phone"},
-     {"role": "assistant", "content": "Nice to meet you, Phone."},
-     {"role": "user", "content": "what's my name"},
-     {"role": "assistant", "content": "Phone -- you told me a moment ago."}],
-    [{"role": "user", "content": "who are you"}, {"role": "assistant", "content": "A language model."}],
-    [{"role": "user", "content": "thanks"}, {"role": "assistant", "content": "Anytime."}],
-    [{"role": "user", "content": "bye"}, {"role": "assistant", "content": "See you."}],
-]
-
-
-@pytest.fixture(scope="module")
-def tiny_base(tmp_path_factory):
-    """A Qwen3-shaped model and a byte-level tokenizer with the ChatML markers, built offline.
-
-    Nothing is downloaded, so this runs wherever the tests do. One layer of width 32 trains in
-    milliseconds a step on the CPU -- enough to drive the real training loop end to end.
-    """
-    transformers = pytest.importorskip("transformers")
-    pytest.importorskip("peft")
-    from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
-
-    from llm.chat_data import DEFAULT_SYSTEM
-
-    base = tmp_path_factory.mktemp("tiny-base")
-    raw = Tokenizer(models.BPE())
-    raw.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
-    raw.decoder = decoders.ByteLevel()
-    texts = [DEFAULT_SYSTEM] + [m["content"] for convo in PERSONA for m in convo]
-    raw.train_from_iterator(texts, trainers.BpeTrainer(
-        vocab_size=320, initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
-        special_tokens=["<|endoftext|>", "<|im_start|>", "<|im_end|>"]))
-    tok = transformers.PreTrainedTokenizerFast(
-        tokenizer_object=raw, eos_token="<|endoftext|>", pad_token="<|endoftext|>")
-    assert len(tok.encode("<|im_end|>", add_special_tokens=False)) == 1, "markers must be one token"
-    tok.save_pretrained(base)
-
-    cfg = transformers.Qwen3Config(
-        vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=1,
-        num_attention_heads=2, num_key_value_heads=1, head_dim=16, max_position_embeddings=256,
-        tie_word_embeddings=True)
-    torch.manual_seed(0)
-    transformers.Qwen3ForCausalLM(cfg).save_pretrained(base)
-    return base
-
-
-def _chat_sft(base, out, persona_file, monkeypatch, *extra) -> None:
-    import sys
-
-    from llm.chat_sft import main
-
-    argv = ["chat_sft", "--base", str(base), "--out", str(out), "--persona", str(persona_file),
-            "--persona-repeat", "3", "--ultrachat", "0", "--oasst", "0", "--max-len", "96",
-            "--epochs", "1", "--batch-size", "1", "--accum", "2", "--lr", "1e-3", "--warmup", "1",
-            "--lora-r", "4", "--lora-alpha", "8", "--eval-every", "2", "--sample-every", "9",
-            "--save-every", "2", "--device", "cpu", *extra]
-    monkeypatch.setattr(sys, "argv", argv)
-    main()
-
-
-@pytest.fixture(scope="module")
-def finished_run(tiny_base, tmp_path_factory):
-    """One complete run: 18 conversations, 9 optimizer steps, saving every 2."""
-    monkeypatch = pytest.MonkeyPatch()
-    root = tmp_path_factory.mktemp("chat-run")
-    persona_file = root / "persona.jsonl"
-    persona_file.write_text("\n".join(json.dumps({"messages": c}) for c in PERSONA), encoding="utf-8")
-    try:
-        _chat_sft(tiny_base, root / "a", persona_file, monkeypatch)
-    finally:
-        monkeypatch.undo()
-    return root / "a", persona_file
-
-
 def test_a_run_finishes_with_a_complete_marked_checkpoint(finished_run) -> None:
     run, _ = finished_run
     final = find_checkpoint(run)
@@ -555,7 +476,7 @@ def test_a_run_finishes_with_a_complete_marked_checkpoint(finished_run) -> None:
 
 
 def test_a_killed_and_resumed_run_ends_identical_to_an_unbroken_one(
-    finished_run, tiny_base, tmp_path, monkeypatch
+    finished_run, tiny_base, tmp_path, monkeypatch, run_chat_sft
 ) -> None:
     """The property every resume fix in this project was for, through the real command: weights,
     optimizer, data position and dropout's random state all restored. Simulated as a kill just
@@ -570,13 +491,14 @@ def test_a_killed_and_resumed_run_ends_identical_to_an_unbroken_one(
     shutil.rmtree(killed / "step-000009")
     (killed / "latest.json").write_text(json.dumps({"dir": "step-000008", "step": 8}))
 
-    _chat_sft(tiny_base, killed, persona_file, monkeypatch, "--resume")
+    run_chat_sft(tiny_base, killed, persona_file, monkeypatch, "--resume")
 
     a = load_file(run / "step-000009" / "adapter" / "adapter_model.safetensors")
     b = load_file(killed / "step-000009" / "adapter" / "adapter_model.safetensors")
     assert a.keys() == b.keys()
     for name in a:
         assert torch.equal(a[name], b[name]), f"{name} differs after resuming"
+
 
 
 def test_the_loaded_chat_model_computes_what_was_trained(finished_run, tiny_base) -> None:
@@ -602,7 +524,7 @@ def test_the_loaded_chat_model_computes_what_was_trained(finished_run, tiny_base
         assert torch.allclose(merged(x).logits, trained(x).logits, atol=1e-5)
 
 
-def test_chat_validation_loss_is_the_mean_over_graded_tokens(tiny_base) -> None:
+def test_chat_validation_loss_is_the_mean_over_graded_tokens(tiny_base, persona) -> None:
     """The end-to-end runs have no validation set (no external data offline), so evaluate()'s
     scoring loop never ran in a test. Checked here against the definition: every graded token
     counts once, prompts and padding not at all."""
@@ -614,7 +536,7 @@ def test_chat_validation_loss_is_the_mean_over_graded_tokens(tiny_base) -> None:
 
     tok = AutoTokenizer.from_pretrained(tiny_base)
     model = AutoModelForCausalLM.from_pretrained(tiny_base, dtype=torch.float32)
-    data = ChatDataset([{"messages": c} for c in PERSONA], tok, 96)
+    data = ChatDataset([{"messages": c} for c in persona], tok, 96)
     batches = length_grouped_batches(data, 2, seed=0)
 
     total, count = 0.0, 0
