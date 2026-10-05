@@ -466,8 +466,9 @@ def test_resume_restores_the_learning_rate_schedule(cfg, ids, tmp_path) -> None:
     _tiny_run(cfg, ids, tmp_path / "b", steps=5, save_every=4)  # checkpoint at 4
     _, history = _tiny_run(cfg, ids, tmp_path / "b", steps=20, resume=True, save_every=4)
     assert history["step"][0] == 5
-    # The first resumed step uses step 5's learning rate, not step 0's.
-    expected = 3e-4 * lr_at_step(6, warmup_steps=2, total_steps=20)
+    # The first resumed step uses step 5's learning rate, not step 0's. (This once asserted step
+    # 6's: the loop logged the rate after advancing the schedule, and the test matched the log.)
+    expected = 3e-4 * lr_at_step(5, warmup_steps=2, total_steps=20)
     assert history["lr"][0] == pytest.approx(expected, rel=1e-6)
 
 
@@ -501,7 +502,7 @@ def test_stop_at_pauses_without_shortening_the_schedule(cfg, ids, tmp_path) -> N
     _, history = _tiny_run(cfg, ids, tmp_path, steps=14, stop_at=9, save_every=0)
     assert history["step"] == list(range(9))
     assert not history["finished"]
-    expected = 3e-4 * lr_at_step(9, warmup_steps=2, total_steps=14)
+    expected = 3e-4 * lr_at_step(8, warmup_steps=2, total_steps=14)   # the rate step 8 used
     assert history["lr"][-1] == pytest.approx(expected, rel=1e-6)
     # Saved even with save_every=0: stopping without a checkpoint would lose the whole run.
     assert torch.load(tmp_path / "latest.pt", weights_only=True)["step"] == 8

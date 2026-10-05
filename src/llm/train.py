@@ -227,6 +227,12 @@ def train(
         extras: dict = {}
         done = checkpoint.load(resume_from, model, optimizer, scheduler, device, extras)
         start_step = done + 1
+        # The optimizer's saved rate belongs to the schedule it was saved under. Resuming under a
+        # longer one -- training further after a run finished -- would spend the first step at
+        # that stale rate, so take it from this run's schedule at the resumed position instead.
+        for group, base, fn in zip(optimizer.param_groups, scheduler.base_lrs,
+                                   scheduler.lr_lambdas, strict=True):
+            group["lr"] = base * fn(scheduler.last_epoch)
         tokens_seen = int(extras.get("tokens_seen", 0))
         elapsed_before = float(extras.get("elapsed", 0.0))
         if verbose:
@@ -278,6 +284,9 @@ def train(
         if tcfg.grad_clip > 0:
             nn.utils.clip_grad_norm_(model.parameters(), tcfg.grad_clip)
 
+        # The rate this step actually used, read before the scheduler moves on. Reading it after
+        # scheduler.step() logged the *next* step's rate, so every logged value was one step early.
+        lr = optimizer.param_groups[0]["lr"]
         optimizer.step()
         scheduler.step()
 
@@ -291,7 +300,6 @@ def train(
                 f"data for out-of-range ids, or raise grad_clip's aggressiveness."
             )
 
-        lr = scheduler.get_last_lr()[0]
         history["step"].append(step)
         history["train_loss"].append(accumulated)
         history["lr"].append(lr)
