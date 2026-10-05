@@ -44,6 +44,7 @@ import torch.nn.functional as F
 
 from llm.chat_data import IGNORE, ChatDataset, collate, length_grouped_batches, render
 from llm.chat_infer import find_checkpoint
+from llm.console import use_utf8
 from llm.optim import lr_at_step
 
 BASE_MODEL = "Qwen/Qwen3-1.7B-Base"
@@ -589,6 +590,10 @@ def main(argv: list[str] | None = None) -> None:
     """Six steps: arguments, the run's data, the model, the schedule, any checkpoint, the loop."""
     from transformers import AutoTokenizer
 
+    # run.bat sends this output to a log file, which Python writes in the Windows code page. The
+    # Burmese never-seen probe cannot be written in it: the first sample print raised, before that
+    # step's checkpoint was saved, so every resume would have died at the same step.
+    use_utf8()
     args = parse_args(argv)
     out = Path(args.out)
     check_fresh_start(out, args.resume)

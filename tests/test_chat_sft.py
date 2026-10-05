@@ -500,6 +500,28 @@ def test_a_killed_and_resumed_run_ends_identical_to_an_unbroken_one(
         assert torch.equal(a[name], b[name]), f"{name} differs after resuming"
 
 
+def test_samples_can_be_written_to_a_log_in_the_windows_code_page(
+    tiny_base, persona, tmp_path, monkeypatch, run_chat_sft
+) -> None:
+    """run.bat sends the output to a log file, and Python writes a redirected stream in the
+    Windows code page, cp1252. The never-seen probes include a Burmese greeting cp1252 cannot
+    encode, so the first sample print raised -- before that step's checkpoint was saved, so every
+    resume would have died at the same step."""
+    import io
+    import sys
+
+    log = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", log)
+    persona_file = tmp_path / "persona.jsonl"
+    persona_file.write_text("\n".join(json.dumps({"messages": c}) for c in persona),
+                            encoding="utf-8")
+    run_chat_sft(tiny_base, tmp_path / "run", persona_file, monkeypatch, "--persona-repeat", "1",
+                 "--sample-every", "1", "--eval-every", "0", "--save-every", "0")
+    log.flush()
+    burmese = HELDOUT_PROMPTS[-1][-1]["content"]
+    assert not burmese.isascii()
+    assert burmese in log.buffer.getvalue().decode("utf-8")
+
 
 def test_the_loaded_chat_model_computes_what_was_trained(finished_run, tiny_base) -> None:
     """load_chat_model -- find the base from the run, seed the markers, untie, merge -- must give
