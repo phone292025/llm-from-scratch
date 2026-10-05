@@ -34,6 +34,18 @@ that would silently truncate, unused loop variables, import order. Configured in
 `pyproject.toml`; CI runs it before the tests.
 
 ```bash
+.venv/Scripts/python -m mypy
+```
+
+```bash
+.venv/Scripts/python -m mypy --platform linux
+```
+
+Type-checks `src/llm`, configured in `pyproject.toml`. Run it both ways: mypy checks for the
+platform it runs on, and CI runs on Linux. Windows-only code -- the paste detector's `msvcrt` --
+passes here and fails there unless it sits behind a `sys.platform` check, which mypy reads.
+
+```bash
 .venv/Scripts/python -m pytest tests -q --cov=llm --cov-report=term-missing
 ```
 
@@ -217,10 +229,10 @@ gh run list --limit 5
 gh run watch --exit-status
 ```
 
-CI lints, then tests. It installs CPU torch, so the GPU-specific timings in the demos do not
-run there. The three
-GPT-2 oracle tests skip unless the checkpoint is already cached locally — that is deliberate, so
-CI does not download 548 MB on every push.
+CI lints, type-checks (as Linux), then tests; a failure stops the job, so a type error means the
+tests never ran. It installs CPU torch, so the GPU-specific timings in the demos do not run
+there. The three GPT-2 oracle tests skip unless the checkpoint is already cached locally — that
+is deliberate, so CI does not download 548 MB on every push.
 
 ---
 

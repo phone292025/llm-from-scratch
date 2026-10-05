@@ -132,10 +132,12 @@ def console_input_waiting(wait: float = 0.03) -> bool:
     are still queued. Typed input is not, because nobody types the next line within 30 ms.
     Anywhere else -- a pipe, another OS -- this says no, and a three-quote block still works.
     """
-    try:
-        import msvcrt
-    except ImportError:
+    # A platform check, not a guarded import: mypy reads it, so CI -- type-checking as Linux,
+    # where msvcrt has no functions -- skips the rest instead of failing on it.
+    if sys.platform != "win32":
         return False
+    import msvcrt
+
     if not sys.stdin.isatty():
         return False
     deadline = time.monotonic() + wait

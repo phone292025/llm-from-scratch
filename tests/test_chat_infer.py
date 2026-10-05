@@ -18,6 +18,7 @@ import torch
 from llm.chat_infer import (
     REPLACEMENT,
     ReplyStreamer,
+    console_input_waiting,
     find_checkpoint,
     fit_history,
     read_message,
@@ -269,6 +270,12 @@ def test_a_three_quote_block_spans_lines_anywhere() -> None:
     read_line, more = _typed(['"""', "line one", "", "line two", '"""', "after"], queued_after=0)
     assert read_message(read_line, more) == "line one\n\nline two"
     assert read_message(read_line, more) == "after"
+
+
+def test_nothing_is_queued_off_a_windows_console() -> None:
+    """Off a console -- pytest's captured stdin, a pipe, any OS but Windows -- no paste can be
+    detected, so each line stays its own message. Also runs where msvcrt does not exist at all."""
+    assert console_input_waiting(wait=0.0) is False
 
 
 # --- keeping the conversation bounded ----------------------------------------------------------
