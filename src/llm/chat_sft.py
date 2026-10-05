@@ -377,6 +377,7 @@ def main() -> None:
     p.add_argument("--sample-every", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--device", default=None, help="cuda or cpu; default cuda when available")
     p.add_argument("--no-grad-checkpointing", action="store_true",
                    help="faster, more memory: recomputing activations costs ~30% of throughput")
     args = p.parse_args()
@@ -384,7 +385,7 @@ def main() -> None:
     out = Path(args.out)
     check_fresh_start(out, args.resume)
     out.mkdir(parents=True, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.seed)
 
     tok = AutoTokenizer.from_pretrained(args.base)
@@ -414,7 +415,10 @@ def main() -> None:
     print(f"val         {len(val_data):,} conversations")
     print(f"dropped     {train_data.dropped + val_data.dropped:,} unusable rows")
 
-    model = AutoModelForCausalLM.from_pretrained(args.base, dtype=torch.bfloat16).to(device)
+    # bf16 on the GPU, where it halves memory at no cost in quality. On the CPU, fp32: most CPUs
+    # have no bf16 matrix units, so bf16 there is slower and only less accurate.
+    dtype = torch.bfloat16 if str(device).startswith("cuda") else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(args.base, dtype=dtype).to(device)
     seeded = init_chat_tokens(model, tok)
     print("chatml      " + "  ".join(f"{k} norm {v:.3f}" for k, v in seeded.items()))
     model.config.use_cache = False          # incompatible with gradient checkpointing

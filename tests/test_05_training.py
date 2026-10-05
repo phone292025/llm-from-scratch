@@ -576,3 +576,67 @@ def test_checkpoint_extras_round_trip(cfg, tmp_path) -> None:
     checkpoint.save(tmp_path / "c.pt", GPTModel(cfg), step=3, cfg=cfg, tokens_seen=12345)
     checkpoint.load(tmp_path / "c.pt", GPTModel(cfg), extras=extras)
     assert extras["tokens_seen"] == 12345 and extras["step"] == 3
+
+
+# --- the command line, end to end ----------------------------------------------------------------
+
+
+def _train_cli(tmp_path, monkeypatch, out, *extra):
+    """Run `python -m llm.train` as a user would: one layer of SMALL, a tiny corpus, the CPU."""
+    import sys
+
+    from llm.train import main
+
+    corpus = tmp_path / "corpus.txt"
+    if not corpus.exists():
+        words = "the cat sat on the mat and the dog ran to the park with a red ball".split()
+        corpus.write_text(" ".join(words[i % len(words)] for i in range(3000)) + ".", encoding="utf-8")
+    argv = ["train", "--preset", "small", "--layers", "1", "--context", "32", "--data", str(corpus),
+            "--steps", "6", "--batch-size", "2", "--warmup", "1", "--eval-every", "3",
+            "--eval-batches", "2", "--sample-every", "0", "--save-every", "2", "--out", str(out),
+            "--cpu", *extra]
+    monkeypatch.setattr(sys, "argv", argv)
+    main()
+
+
+def test_the_train_command_pauses_resumes_and_matches_an_unbroken_run(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The whole command, as typed: pause with --stop-at, finish with --resume, and end with the
+    same weights as a run that never stopped. The loop-level identity test cannot see main()'s own
+    wiring -- seeding before the model exists, refusing to write final.pt for half a schedule."""
+    from llm.train import read_metrics
+
+    paused = tmp_path / "paused"
+    _train_cli(tmp_path, monkeypatch, paused, "--stop-at", "3")
+    assert "paused" in capsys.readouterr().out
+    assert not (paused / "final.pt").exists(), "half a schedule must not be labelled final"
+
+    _train_cli(tmp_path, monkeypatch, paused, "--resume", "--final-eval")
+    assert (paused / "final.pt").exists() and (paused / "final_eval.json").exists()
+    assert read_metrics(paused / "metrics.jsonl")["step"] == list(range(6))
+
+    straight = tmp_path / "straight"
+    _train_cli(tmp_path, monkeypatch, straight)
+    a = torch.load(paused / "final.pt", weights_only=True)["model"]
+    b = torch.load(straight / "final.pt", weights_only=True)["model"]
+    assert a.keys() == b.keys()
+    for name in a:
+        assert torch.equal(a[name], b[name]), f"{name} differs between paused and unbroken runs"
+
+
+def test_the_train_command_refuses_a_tokenizer_that_does_not_fit_the_preset(
+    tmp_path, monkeypatch
+) -> None:
+    """A 10k-vocabulary preset fed GPT-2's 50k tokenizer dies mid-run with a device-side assert
+    on CUDA. It has to be refused before the first step."""
+    import sys
+
+    from llm.train import main
+
+    corpus = tmp_path / "c.txt"
+    corpus.write_text("hello world " * 200, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["train", "--preset", "tinystories", "--data", str(corpus),
+                                      "--out", str(tmp_path / "o"), "--cpu"])
+    with pytest.raises(SystemExit, match="expects"):
+        main()
