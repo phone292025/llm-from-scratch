@@ -20,3 +20,4 @@ runs/
 .coverage
 htmlcov/
 .ruff_cache/
+.mypy_cache/

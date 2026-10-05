@@ -27,3 +27,19 @@ select = ["F", "E9", "B", "PLE", "I"]
 [tool.ruff.lint.isort]
 known-first-party = ["llm"]
 
+[tool.mypy]
+files = ["src/llm"]
+python_version = "3.13"   # what the venv and CI run; 3.11 misreads numpy stubs
+ignore_missing_imports = true
+# PyTorch types every submodule attribute as `Tensor | Module`, so `block.attn.W_o.weight` is an
+# error mypy cannot resolve without a cast on every line. These three codes are where that noise
+# lands. Everything else stays on -- wrong argument types, bad assignments, missing attributes,
+# call errors -- which is the kind that caught --overfit passing two keywords twice.
+disable_error_code = ["union-attr", "index", "operator"]
+
+[[tool.mypy.overrides]]
+# Mapping OpenAI's tensors onto ours is nothing but submodule attribute chains, and _assign's
+# shape check at runtime is the real guard there.
+module = "llm.gpt2_weights"
+disable_error_code = ["arg-type"]
+
