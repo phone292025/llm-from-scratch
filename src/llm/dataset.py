@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from llm.tokenizer import BPETokenizer
+from llm.tokenizer import BPETokenizer, TextTokenizer
 
 # 50257 fits in uint16, which halves the size of a tokenized corpus on disk.
 TOKEN_DTYPE = np.uint16
@@ -106,7 +106,7 @@ def train_val_split(
     return shuffled[n_val:], shuffled[:n_val]
 
 
-def tokenize_corpus(docs: list[str], out_path: Path, tok: BPETokenizer | None = None) -> dict:
+def tokenize_corpus(docs: list[str], out_path: Path, tok: TextTokenizer | None = None) -> dict:
     """Tokenize once, store as a flat uint16 array, and report on what came out.
 
     Tokenizing every epoch is wasted work, and a memory-mapped array means the corpus never has to
@@ -143,7 +143,7 @@ def tokenize_corpus(docs: list[str], out_path: Path, tok: BPETokenizer | None = 
     }
 
 
-def load_tokens(path: Path) -> np.ndarray:
+def load_tokens(path: str | Path) -> np.ndarray:
     """Memory-map a tokenized corpus. Nothing is read until it is indexed."""
     return np.memmap(path, dtype=TOKEN_DTYPE, mode="r")
 
@@ -163,4 +163,4 @@ if __name__ == "__main__":
     print("targets:", y.tolist(), [tok.decode([i]) for i in y.tolist()])
     print("\ntargets is x shifted left by one:")
     for i in range(len(x)):
-        print(f"  given {tok.decode(x[: i + 1].tolist())!r:30} predict {tok.decode([y[i]])!r}")
+        print(f"  given {tok.decode(x[: i + 1].tolist())!r:30} predict {tok.decode([int(y[i])])!r}")

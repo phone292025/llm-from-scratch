@@ -43,6 +43,14 @@ class Tokenizer(Protocol):
     def encode(self, text: str) -> list[int]: ...
 
 
+class Examples(Protocol):
+    """Anything indexable into (ids, labels) pairs: instruction data here, chat data in chat_data."""
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, i: int) -> tuple[list[int], list[int]]: ...
+
+
 def build_prompt(instruction: str, input_text: str = "") -> str:
     """The text the model sees before it is expected to answer.
 
@@ -114,7 +122,7 @@ def collate(batch: list[tuple[list[int], list[int]]], pad_id: int):
 
 
 def length_grouped_batches(
-    dataset: InstructionDataset, batch_size: int, seed: int = 0
+    dataset: Examples, batch_size: int, seed: int = 0
 ) -> list[list[int]]:
     """Batch examples of similar length together, then shuffle the batches.
 

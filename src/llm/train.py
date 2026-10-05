@@ -20,6 +20,7 @@ import math
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -33,7 +34,7 @@ from llm.dataset import MAX_TOKEN_ID, TOKEN_DTYPE, make_dataloader
 from llm.losses import evaluate
 from llm.model import GPTModel
 from llm.optim import make_optimizer, make_schedule
-from llm.tokenizer import BPETokenizer
+from llm.tokenizer import BPETokenizer, TextTokenizer
 
 
 @dataclass
@@ -69,7 +70,7 @@ def pick_device() -> torch.device:
 
 
 def load_text_corpus(
-    path: str | Path, tok: BPETokenizer, val_fraction: float = 0.1
+    path: str | Path, tok: TextTokenizer, val_fraction: float = 0.1
 ) -> tuple[np.ndarray, np.ndarray]:
     """Tokenize one text file and split it by position.
 
@@ -130,7 +131,9 @@ def _batch_stream(loader: DataLoader, seed: int, start: int = 0):
     list for the first epoch and reshuffles the order of its batches for every epoch after, which
     the old loop never did. Anything else is taken in order.
     """
-    dataset, collate, batch_sampler = loader.dataset, loader.collate_fn, loader.batch_sampler
+    # torch types Dataset with no __len__, though every map-style dataset has one.
+    dataset: Any = loader.dataset
+    collate, batch_sampler = loader.collate_fn, loader.batch_sampler
 
     def epoch_batches(epoch: int) -> list[list[int]]:
         rng = np.random.default_rng([seed, epoch])
@@ -160,7 +163,7 @@ def _batch_stream(loader: DataLoader, seed: int, start: int = 0):
 
 
 @torch.no_grad()
-def _sample(model: GPTModel, tok: BPETokenizer, prompt: str, n: int, device) -> str:
+def _sample(model: GPTModel, tok: TextTokenizer, prompt: str, n: int, device) -> str:
     """A greedy continuation, for watching the model improve during a run.
 
     Stops at the end-of-text token. Without that, an instruction-tuned model finishes its answer
@@ -180,7 +183,7 @@ def train(
     train_loader: DataLoader,
     val_loader: DataLoader | None,
     tcfg: TrainConfig,
-    tok: BPETokenizer | None = None,
+    tok: TextTokenizer | None = None,
     device: torch.device | None = None,
     verbose: bool = True,
     resume_from: str | Path | None = None,
@@ -220,7 +223,8 @@ def train(
     # bf16 carries fp32's exponent range, so unlike fp16 it needs no gradient scaler.
     use_amp = tcfg.bf16 and device.type == "cuda"
 
-    history: dict[str, list] = {"step": [], "train_loss": [], "val_step": [], "val_loss": [], "lr": []}
+    # Series per step, plus a few totals added at the end -- hence Any.
+    history: dict[str, Any] = {"step": [], "train_loss": [], "val_step": [], "val_loss": [], "lr": []}
     tokens_seen = 0
     tokens_here = 0  # since this process started, for an honest throughput figure
     elapsed_before = 0.0
@@ -294,19 +298,19 @@ def train(
         scheduler.step()
 
         # The one sync per step, rather than one per micro-batch.
-        accumulated = float(accumulated)
-        if not math.isfinite(accumulated):
+        loss_value = float(accumulated)
+        if not math.isfinite(loss_value):
             # NaN propagates silently: the loss line keeps printing, the weights are already
             # ruined, and the next hour of compute produces nothing recoverable.
             raise RuntimeError(
-                f"loss became {accumulated} at step {step}. Lower the learning rate, check the "
+                f"loss became {loss_value} at step {step}. Lower the learning rate, check the "
                 f"data for out-of-range ids, or raise grad_clip's aggressiveness."
             )
 
         history["step"].append(step)
-        history["train_loss"].append(accumulated)
+        history["train_loss"].append(loss_value)
         history["lr"].append(lr)
-        record(kind="train", step=step, loss=accumulated, lr=lr, tokens=tokens_seen)
+        record(kind="train", step=step, loss=loss_value, lr=lr, tokens=tokens_seen)
 
         if verbose and tcfg.log_every and (step % tcfg.log_every == 0 or step == tcfg.max_steps - 1):
             # Counted, not inferred from batch_size x width: with variable-length batches the
@@ -314,7 +318,7 @@ def train(
             # since this process started, so a resume does not dilute it.
             run = time.perf_counter() - start
             print(
-                f"  step {step:>5}  loss {accumulated:7.4f}  ppl {math.exp(min(accumulated, 20)):>9,.1f}"
+                f"  step {step:>5}  loss {loss_value:7.4f}  ppl {math.exp(min(loss_value, 20)):>9,.1f}"
                 f"  lr {lr:.2e}  {tokens_here / max(run, 1e-9):>8,.0f} tok/s"
             )
 
@@ -468,6 +472,7 @@ def main() -> None:
     if args.layers:
         cfg = replace(cfg, n_layers=args.layers)
 
+    tok: TextTokenizer
     if args.tokenizer:
         from llm.bpe import Tokenizer
 

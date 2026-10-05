@@ -37,6 +37,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -196,7 +197,8 @@ def oasst_conversations(ds, limit: int) -> list[dict]:
 
     out: list[dict] = []
     for root in by_parent.get(None, []):
-        messages, node = [], root
+        messages: list[dict] = []
+        node: dict | None = root
         while node is not None and len(messages) < 12:
             role = "user" if node["role"] == "prompter" else "assistant"
             messages.append({"role": role, "content": node["text"]})
@@ -329,7 +331,7 @@ def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
     partial.mkdir(parents=True)
     model.save_pretrained(partial / "adapter")
     torch.save(opt.state_dict(), partial / "optimizer.pt")
-    rng = {"cpu": torch.get_rng_state()}
+    rng: dict[str, Any] = {"cpu": torch.get_rng_state()}
     if torch.cuda.is_available():
         rng["cuda"] = torch.cuda.get_rng_state_all()
     torch.save(rng, partial / "rng.pt")
@@ -431,7 +433,9 @@ def build_model(args: argparse.Namespace, tok, device: str):
     # bf16 on the GPU, where it halves memory at no cost in quality. On the CPU, fp32: most CPUs
     # have no bf16 matrix units, so bf16 there is slower and only less accurate.
     dtype = torch.bfloat16 if str(device).startswith("cuda") else torch.float32
-    model = AutoModelForCausalLM.from_pretrained(args.base, dtype=dtype).to(device)
+    model = AutoModelForCausalLM.from_pretrained(args.base, dtype=dtype)
+    # transformers wraps .to() in a decorator that hides its signature from mypy.
+    model = model.to(device)  # type: ignore[arg-type]
     seeded = init_chat_tokens(model, tok)
     print("chatml      " + "  ".join(f"{k} norm {v:.3f}" for k, v in seeded.items()))
     model.config.use_cache = False          # incompatible with gradient checkpointing
@@ -453,12 +457,12 @@ def build_model(args: argparse.Namespace, tok, device: str):
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj", "lm_head"],
     )
-    model = get_peft_model(model, lora)
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total = sum(p.numel() for p in model.parameters())
+    wrapped = get_peft_model(model, lora)
+    trainable = sum(p.numel() for p in wrapped.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in wrapped.parameters())
     print(f"lora        r={args.lora_r} alpha={args.lora_alpha}; "
           f"{trainable:,} trainable of {total:,} ({trainable / total:.2%})")
-    return model
+    return wrapped
 
 
 def schedule_length(args: argparse.Namespace, data: RunData) -> int:
@@ -472,7 +476,9 @@ def restore(found: Path, out: Path, model, opt, device: str) -> int:
     from peft import set_peft_model_state_dict
     from safetensors.torch import load_file
 
-    loaded = set_peft_model_state_dict(model, load_file(found / "adapter" / "adapter_model.safetensors"))
+    # peft returns torch's _IncompatibleKeys, a namedtuple its annotations do not name.
+    loaded: Any = set_peft_model_state_dict(
+        model, load_file(found / "adapter" / "adapter_model.safetensors"))
     if loaded.unexpected_keys:
         # A partial load would carry on from half-fresh weights while claiming to resume.
         raise SystemExit(f"adapter at {found} does not fit this model: "

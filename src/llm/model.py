@@ -8,6 +8,7 @@ See notes/04_the_model.md.
 from __future__ import annotations
 
 import math
+from typing import overload
 
 import torch
 import torch.nn.functional as F
@@ -81,6 +82,12 @@ class GPTModel(nn.Module):
             for block in self.blocks:
                 block.attn.W_o.weight.mul_(scale)
                 block.ffn.down.weight.mul_(scale)
+
+    @overload
+    def forward(self, idx: Tensor, targets: None = None, cache=None) -> Tensor: ...
+
+    @overload
+    def forward(self, idx: Tensor, targets: Tensor, cache=None) -> tuple[Tensor, Tensor]: ...
 
     def forward(
         self, idx: Tensor, targets: Tensor | None = None, cache=None

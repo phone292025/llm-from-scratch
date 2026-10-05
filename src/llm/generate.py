@@ -13,7 +13,7 @@ from torch import Tensor
 
 from llm.kv_cache import KVCache
 from llm.model import GPTModel
-from llm.tokenizer import BPETokenizer
+from llm.tokenizer import BPETokenizer, TextTokenizer
 
 
 def apply_temperature(logits: Tensor, temperature: float) -> Tensor:
@@ -171,7 +171,7 @@ def iter_generate(
 
 
 def generate_text(
-    model: GPTModel, tok: BPETokenizer, prompt: str, max_new_tokens: int = 50, **kwargs
+    model: GPTModel, tok: TextTokenizer, prompt: str, max_new_tokens: int = 50, **kwargs
 ) -> str:
     """Convenience wrapper: string in, string out. The prompt is included in the returned text."""
     device = next(model.parameters()).device

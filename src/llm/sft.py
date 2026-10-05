@@ -32,6 +32,7 @@ from llm.instruct import (
     split,
 )
 from llm.model import GPTModel
+from llm.tokenizer import TextTokenizer
 from llm.train import TrainConfig, pick_device, plot_history, read_metrics, train
 
 
@@ -83,6 +84,7 @@ def main() -> None:
     device = torch.device("cpu") if args.cpu else pick_device()
     torch.manual_seed(args.seed)
 
+    tok: TextTokenizer | None
     if args.from_checkpoint:
         from llm.bpe import Tokenizer
 
@@ -134,7 +136,9 @@ def main() -> None:
     print(f"device       {device}")
     print(f"model        {model.num_parameters():,} parameters "
           f"({'GPT-2 124M released weights' if not args.from_checkpoint else args.from_checkpoint})")
-    print(f"data         {len(train_loader.dataset):,} train / {len(val_loader.dataset):,} val pairs")
+    # torch types Dataset with no __len__; these are InstructionDatasets, which have one.
+    n_train, n_val = len(train_loader.dataset), len(val_loader.dataset)  # type: ignore[arg-type]
+    print(f"data         {n_train:,} train / {n_val:,} val pairs")
     print(f"schedule     {args.epochs:g} epochs = {max_steps:,} steps of "
           f"{args.batch_size * args.accum} examples, lr {args.lr:g}")
     print(f"checkpoints  every {args.save_every} steps -> {out / 'latest.pt'}\n")

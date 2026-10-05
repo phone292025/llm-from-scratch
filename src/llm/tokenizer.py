@@ -10,6 +10,29 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Iterator
+from typing import Protocol
+
+
+class TextTokenizer(Protocol):
+    """What training, generation and corpus preparation need from a tokenizer.
+
+    `BPETokenizer` below (GPT-2's vocabulary, through tiktoken) and `llm.bpe.Tokenizer` (trained in
+    this project) both provide it, which is what lets one --tokenizer flag switch between them. The
+    docs always said the two were interchangeable; this makes the claim checkable.
+    """
+
+    @property
+    def vocab_size(self) -> int: ...
+
+    @property
+    def eot_id(self) -> int: ...
+
+    def encode(self, text: str, allow_special: bool = False) -> list[int]: ...
+
+    def decode(self, ids: Iterable[int]) -> str: ...
+
+    def encode_documents(self, docs: Iterable[str]) -> Iterator[int]: ...
+
 
 # GPT-2 splits on punctuation and whitespace, keeping the separators as tokens.
 _SPLIT = re.compile(r'([,.:;?_!"()\']|--|\s)')

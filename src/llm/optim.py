@@ -35,7 +35,8 @@ def make_optimizer(
     output projection and behaves like a matrix. Some references exclude embeddings; the
     dimensionality rule is what nanoGPT and most current implementations use.
     """
-    decay, no_decay = [], []
+    decay: list[nn.Parameter] = []
+    no_decay: list[nn.Parameter] = []
     for param in model.parameters():
         if not param.requires_grad:
             continue
