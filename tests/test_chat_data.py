@@ -202,3 +202,16 @@ def test_longer_conversations_give_more_signal(tok) -> None:
     long = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(6)]
     _, labels = build_example(tok, long, system=None)
     assert graded_text(tok, labels).count(IM_END) == 3
+
+
+def test_last_turn_only_grades_just_the_final_reply(tok, conversation) -> None:
+    """For preference pairs: two endings of one conversation are compared, so the shared earlier
+    replies must not be scored -- they would add the same amount to both sides."""
+    _, labels = build_example(tok, conversation, system=None, last_turn_only=True)
+    assert graded_text(tok, labels) == "Not much." + IM_END + "\n"
+
+
+def test_last_turn_only_changes_nothing_else(tok, conversation) -> None:
+    all_ids, _ = build_example(tok, conversation, system=None)
+    last_ids, _ = build_example(tok, conversation, system=None, last_turn_only=True)
+    assert all_ids == last_ids

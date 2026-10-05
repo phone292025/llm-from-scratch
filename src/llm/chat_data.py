@@ -62,7 +62,7 @@ def render(messages: Sequence[Message], system: str | None = DEFAULT_SYSTEM) -> 
 
 def build_example(
     tok: Tokenizer, messages: Sequence[Message], max_len: int = 1024,
-    system: str | None = DEFAULT_SYSTEM,
+    system: str | None = DEFAULT_SYSTEM, last_turn_only: bool = False,
 ) -> tuple[list[int], list[int]]:
     """Token ids and labels for one conversation.
 
@@ -70,6 +70,9 @@ def build_example(
     teaches the model to stop instead of carrying on and inventing the user's next message.
     Masked: the system prompt, every user turn, and the `<|im_start|>assistant\\n` header, since
     the header is given at generation time rather than predicted.
+
+    `last_turn_only` grades the final reply alone. Preference tuning compares two endings of the
+    same conversation, and everything before the ending is shared, so only the ending is scored.
     """
     turns = list(messages)
     if system and (not turns or turns[0]["role"] != "system"):
@@ -77,12 +80,13 @@ def build_example(
 
     ids: list[int] = []
     labels: list[int] = []
-    for turn in turns:
+    for i, turn in enumerate(turns):
         header = tok.encode(f"{IM_START}{turn['role']}\n", add_special_tokens=False)
         body = tok.encode(f"{turn['content'].strip()}{IM_END}\n", add_special_tokens=False)
         ids += header + body
         labels += [IGNORE] * len(header)
-        labels += body if turn["role"] == "assistant" else [IGNORE] * len(body)
+        graded = turn["role"] == "assistant" and (not last_turn_only or i == len(turns) - 1)
+        labels += body if graded else [IGNORE] * len(body)
 
     # Truncating mid-conversation is fine: whatever complete assistant turns survive are still
     # correctly conditioned on everything before them. Only the tail is lost.

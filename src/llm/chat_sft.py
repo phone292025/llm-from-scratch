@@ -114,21 +114,23 @@ def data_fingerprint(train: list[dict], val: list[dict]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def check_same_data(state: dict, fingerprint: str) -> None:
-    """Refuse to resume onto different conversations than the run started with.
+def check_same_data(state: dict, fingerprint: str,
+                    source: str = "data/chat/persona.jsonl") -> None:
+    """Refuse to resume onto different data than the run started with.
 
-    Resume rebuilds the data from its sources, and one of them -- `data/chat/persona.jsonl` -- is
-    a file anyone can edit. Change it mid-run and a resume would carry on, from the right step
-    with the right optimizer state, over a different set of conversations, and nothing would say
-    so. Checkpoints written before this check have no fingerprint and cannot be checked.
+    Resume rebuilds the data from its sources, and one of them -- `source` -- is a file anyone can
+    edit. Change it mid-run and a resume would carry on, from the right step with the right
+    optimizer state, over different data, and nothing would say so. Checkpoints written before
+    this check have no fingerprint and cannot be checked.
     """
     expected = state.get("data_fingerprint")
     if expected and expected != fingerprint:
+        # Not "start a fresh run here": check_fresh_start refuses that, to protect this run.
         raise SystemExit(
             f"the training data has changed since this run started (fingerprint {expected}, now "
-            f"{fingerprint}) -- most likely data/chat/persona.jsonl was edited. Resuming would "
-            f"continue on different conversations. Put the file back as it was, or start a fresh "
-            f"run with run.bat."
+            f"{fingerprint}) -- most likely {source} was edited. Resuming would continue on "
+            f"different data. Put the file back as it was, or start a new run with a different "
+            f"--out."
         )
 
 
@@ -313,8 +315,8 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
 
 
 def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
-                    finished: bool = False, recipe: int = DATA_RECIPE,
-                    fingerprint: str | None = None) -> Path:
+                    finished: bool = False, recipe: int | None = DATA_RECIPE,
+                    fingerprint: str | None = None, extra: dict | None = None) -> Path:
     """Write a complete checkpoint into its own directory, then point `latest.json` at it.
 
     A save is 1.1 GB -- the adapter carries the 311M-entry embedding table because lm_head is a
@@ -338,7 +340,7 @@ def save_checkpoint(out: Path, model, opt, step: int, base: str, keep: int = 2,
     torch.save(rng, partial / "rng.pt")
     (partial / "state.json").write_text(
         json.dumps({"step": step, "base": base, "finished": finished, "data_recipe": recipe,
-                    "data_fingerprint": fingerprint}),
+                    "data_fingerprint": fingerprint, **(extra or {})}),
         encoding="utf-8")
     if final.exists():
         shutil.rmtree(final)
@@ -365,7 +367,7 @@ class RunData:
     fingerprint: str
 
 
-def _state(checkpoint: Path) -> dict:
+def read_state(checkpoint: Path) -> dict:
     return json.loads((checkpoint / "state.json").read_text(encoding="utf-8"))
 
 
@@ -406,13 +408,13 @@ def prepare_data(args: argparse.Namespace, tok, found: Path | None) -> RunData:
     fingerprinted and compared with the checkpoint's, so a resume can neither change how the data
     is split nor carry on over conversations edited in the meantime.
     """
-    recipe = _state(found).get("data_recipe", 1) if found is not None else DATA_RECIPE
+    recipe = read_state(found).get("data_recipe", 1) if found is not None else DATA_RECIPE
     kept = " (kept from the run being resumed)" if recipe != DATA_RECIPE else ""
     print(f"data        recipe {recipe}{kept}")
     train_records, val_records = load_sources(args, tok, recipe)
     fingerprint = data_fingerprint(train_records, val_records)
     if found is not None:
-        check_same_data(_state(found), fingerprint)
+        check_same_data(read_state(found), fingerprint)
     print(f"            fingerprint {fingerprint}")
 
     train = ChatDataset(train_records, tok, args.max_len)
@@ -484,7 +486,7 @@ def restore(found: Path, out: Path, model, opt, device: str) -> int:
         # A partial load would carry on from half-fresh weights while claiming to resume.
         raise SystemExit(f"adapter at {found} does not fit this model: "
                          f"{loaded.unexpected_keys[:3]} ...")
-    step = _state(found)["step"]
+    step = read_state(found)["step"]
     opt.load_state_dict(torch.load(found / "optimizer.pt", map_location=device))
     if (found / "rng.pt").exists():
         rng = torch.load(found / "rng.pt")
