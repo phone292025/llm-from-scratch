@@ -49,10 +49,10 @@ What is graded, and why each choice matters:
 | part | graded? | if it were the other way |
 |---|---|---|
 | every assistant turn | **yes** | grading only the last one discards most of a long conversation, and the model never learns to use history |
-| the closing `<|im_end|>` | **yes** | the model never learns to stop, and writes your next message for you |
+| the closing `<\|im_end\|>` | **yes** | the model never learns to stop, and writes your next message for you |
 | user turns | no | the model learns to write both halves of the dialogue |
 | system prompt | no | it learns to recite its instructions |
-| `<|im_start|>assistant\n` | no | it is supplied at generation time, so predicting it is wasted signal |
+| `<\|im_start\|>assistant\n` | no | it is supplied at generation time, so predicting it is wasted signal |
 
 Labels are shifted once, in `chat_data`. That is also why `chat_sft` computes the loss itself
 rather than passing `labels=` to the Hugging Face model: the library would shift a second time,
@@ -86,8 +86,8 @@ pretrained without ChatML, so their embedding rows were never trained:
 | row | norm |
 |---|---|
 | a typical trained token | 1.62 (median) |
-| `<|endoftext|>`, trained | 1.88 |
-| `<|im_start|>`, `<|im_end|>` | **0.3748** |
+| `<\|endoftext\|>`, trained | 1.88 |
+| `<\|im_start\|>`, `<\|im_end\|>` | **0.3748** |
 | the *unused* tail of the vocabulary | 0.3748 |
 
 Qwen3 **ties** its embeddings, so that one noisy row is both how the model reads a marker and how

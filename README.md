@@ -15,14 +15,14 @@ Nothing gets coded until its note is read.
 | # | Note | Builds | Status |
 |---|------|--------|--------|
 | 0 | [The mental model](notes/00_overview.md) | — (read first) | [x] written |
-| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `bpe.py` `dataset.py` | [x] **built, 99 tests pass** (26 + 73 for the BPE trainer) |
+| 1 | [Data and tokens](notes/01_data_and_tokens.md) | `tokenizer.py` `bpe.py` `dataset.py` `prepare.py` | [x] **built, 108 tests pass** (26 + 73 for the BPE trainer + 9 for corpus preparation) |
 | 2 | [Attention](notes/02_attention.md) | `attention.py` `config.py` | [x] **built, 38 tests pass** |
 | 3 | [The transformer block](notes/03_transformer_block.md) | `norms.py` `ffn.py` `block.py` | [x] **built, 27 tests pass** |
 | 4 | [The whole model](notes/04_the_model.md) | `model.py` `gpt2_weights.py` | [x] **built, 41 tests pass** |
-| 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 41 tests pass** |
+| 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 43 tests pass** |
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 42 tests pass** |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] **built, 44 tests pass** — `MODERN` builds and trains |
-| 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [x] **built, 68 tests pass** — trained, 759 steps |
+| 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [x] **built, 78 tests pass** — trained, 759 steps |
 
 
 ### Beyond the notes

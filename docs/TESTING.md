@@ -10,8 +10,10 @@ Every command here was run and passes. Paths assume you are in `C:\Users\phone\D
 .venv/Scripts/python -m pytest tests/ -q
 ```
 
-277 tests, about 35 seconds. If this is green, the implementation is correct as far as anything
-can tell you without training a model.
+434 tests, about 70 seconds, all on the CPU. If this is green, the implementation is correct as
+far as anything can tell you without training a model -- and that now includes training: both
+training commands are run end to end on tiny models, killed, resumed, and compared with runs that
+never stopped.
 
 Per note, when you want to know *which* part broke:
 
@@ -20,6 +22,25 @@ Per note, when you want to know *which* part broke:
 ```
 
 `-v` names each test as it runs, which doubles as a readable list of what is being checked.
+
+### Lint, and what the tests do not reach
+
+```bash
+.venv/Scripts/python -m ruff check src scripts tests
+```
+
+Rules that find bugs rather than enforce taste: undefined names, unused imports, `zip()` calls
+that would silently truncate, unused loop variables, import order. Configured in
+`pyproject.toml`; CI runs it before the tests.
+
+```bash
+.venv/Scripts/python -m pytest tests -q --cov=llm --cov-report=term-missing
+```
+
+Lists every line of `src/llm` no test executes. Read it with two caveats. Most "missing" lines
+are the `__main__` demo blocks, which are run by hand. And code that runs in a worker process --
+parallel pre-tokenization, parallel corpus encoding -- shows as missing even though tests do run
+it, because coverage only watches the main process.
 
 ---
 
@@ -41,6 +62,10 @@ Most of them are shape checks. These six are the ones that would catch a real di
 | `the_score_depends_only_on_the_distance` | a RoPE that rotates q and k but does not make attention relative — the one property the whole scheme exists for |
 | `rope_carries_real_position_information` | a positional scheme wired in but doing nothing, giving a model that trains happily with no idea what order its tokens came in |
 | `cached_decoding_matches_uncached_under_rope` | rotating each decoded token by position 0 instead of its real position — still fluent, still wrong |
+| `the_train_command_pauses_resumes_and_matches_an_unbroken_run` | the training *command*, not just the loop: `--stop-at`, `--resume`, and bit-identical weights at the end |
+| `a_killed_and_resumed_run_ends_identical_to_an_unbroken_one` | the same for chat training, on a tiny Qwen3-shaped model built offline: adapter, optimizer, data position and dropout's random state all restored |
+| `encoding_in_chunks_equals_encoding_the_whole_file` | parallel corpus encoding that is not exact, though its docstring promised it was and nothing checked |
+| `a_long_final_document_does_not_hang_the_search` | the boundary search that looped forever when no `<\|endoftext\|>` followed a cut — found by this test |
 | `a_resumed_run_is_identical_to_one_that_never_stopped` | a resume that restarts the data stream instead of continuing it. Loss falls, the step and learning rate are right, and the run quietly trains on half as much distinct data — this happened, to the TinyStories baseline |
 | `the_streamer_sees_exactly_what_generate_produced` | a chat streamer that keeps the prompt. `talk.py` shipped saving the *system prompt* as every reply, invisible until the second turn |
 | `untied_merge_reproduces_the_trained_model_exactly` | merging an adapter into tied embeddings, which silently changes the model you talk to from the one you trained |
@@ -192,7 +217,8 @@ gh run list --limit 5
 gh run watch --exit-status
 ```
 
-CI installs CPU torch, so the GPU-specific timings in the demos do not run there. The three
+CI lints, then tests. It installs CPU torch, so the GPU-specific timings in the demos do not
+run there. The three
 GPT-2 oracle tests skip unless the checkpoint is already cached locally — that is deliberate, so
 CI does not download 548 MB on every push.
 
