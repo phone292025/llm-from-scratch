@@ -59,7 +59,7 @@ def main() -> None:
     probs = logits.softmax(-1)
     top = probs.topk(8)
     print("  the model's own top 8 continuations:")
-    for p, i in zip(top.values.tolist(), top.indices.tolist()):
+    for p, i in zip(top.values.tolist(), top.indices.tolist(), strict=True):
         bar = "#" * int(60 * p / top.values[0].item())
         print(f"    {tok.decode([i])!r:>14} {p:>6.1%}  {bar}")
 

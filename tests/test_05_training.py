@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -20,7 +21,13 @@ from llm.dataset import make_dataloader
 from llm.losses import compute_loss, evaluate
 from llm.model import GPTModel
 from llm.optim import lr_at_step, make_optimizer, make_schedule
-from llm.train import TrainConfig, check_vocabulary, load_text_corpus, plot_history, train
+from llm.train import (
+    TrainConfig,
+    check_vocabulary,
+    load_text_corpus,
+    plot_history,
+    train,
+)
 
 VOCAB, CTX = 512, 32
 
@@ -147,7 +154,7 @@ def test_decay_reaches_the_floor_at_total_steps() -> None:
 
 def test_schedule_decreases_monotonically_after_warmup() -> None:
     values = [lr_at_step(s, warmup_steps=10, total_steps=200) for s in range(10, 200)]
-    assert all(a >= b - 1e-9 for a, b in zip(values, values[1:]))
+    assert all(a >= b - 1e-9 for a, b in pairwise(values))
 
 
 def test_scheduler_drives_the_optimizer(model: GPTModel) -> None:
@@ -185,7 +192,7 @@ def test_accumulation_matches_one_large_batch(cfg: ModelConfig) -> None:
         _, micro = accum(x[sl], targets=y[sl])
         (micro / 4).backward()
 
-    for (name, a), (_, b) in zip(big.named_parameters(), accum.named_parameters()):
+    for (name, a), (_, b) in zip(big.named_parameters(), accum.named_parameters(), strict=True):
         assert torch.allclose(a.grad, b.grad, atol=1e-5), name
 
 
@@ -479,7 +486,7 @@ def test_a_resumed_run_is_identical_to_one_that_never_stopped(cfg, ids, tmp_path
 
     assert resumed_history["step"] == list(range(9, 14))
     assert resumed_history["train_loss"] == straight_history["train_loss"][9:]
-    for (name, a), b in zip(straight.state_dict().items(), resumed.state_dict().values()):
+    for (name, a), b in zip(straight.state_dict().items(), resumed.state_dict().values(), strict=True):
         assert torch.equal(a, b), f"{name} differs after resuming"
 
 

@@ -42,8 +42,8 @@ def read_metrics(run: Path) -> dict[str, dict[int, float]]:
         return {"train": {}, "eval": {}}
     history = train_read_metrics(path)
     return {
-        "train": dict(zip(history["step"], history["train_loss"])),
-        "eval": dict(zip(history["val_step"], history["val_loss"])),
+        "train": dict(zip(history["step"], history["train_loss"], strict=True)),
+        "eval": dict(zip(history["val_step"], history["val_loss"], strict=True)),
     }
 
 
@@ -79,7 +79,7 @@ def plot(runs: list[Path], data: list[dict], out: Path) -> Path | None:
         return None
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    for run, metrics in zip(runs, data):
+    for run, metrics in zip(runs, data, strict=True):
         evals = sorted(metrics["eval"])
         if evals:
             ax.plot(evals, [metrics["eval"][s] for s in evals], lw=2, marker="o", ms=3,
@@ -109,7 +109,7 @@ def main() -> None:
 
     runs = [Path(r) for r in args.runs]
     data = [read_metrics(r) for r in runs]
-    missing = [r for r, d in zip(runs, data) if not d["train"]]
+    missing = [r for r, d in zip(runs, data, strict=True) if not d["train"]]
     if missing:
         raise SystemExit(f"no metrics.jsonl in {', '.join(str(m) for m in missing)}")
 

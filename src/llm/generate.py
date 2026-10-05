@@ -6,9 +6,9 @@ prose. See notes/06_generation.md.
 
 from __future__ import annotations
 
-import torch
 from collections.abc import Iterator
 
+import torch
 from torch import Tensor
 
 from llm.kv_cache import KVCache

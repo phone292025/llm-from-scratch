@@ -8,6 +8,7 @@ CPU only, a few seconds. Trains on the tiny story in data/raw/.
 from __future__ import annotations
 
 from collections import Counter
+from itertools import pairwise
 from pathlib import Path
 
 from llm.bpe import EOT, Tokenizer, count_pretokens, train_from_counts
@@ -82,7 +83,7 @@ def main() -> None:
     print("  First-round pair counts on CS336's worked example:")
     pairs: Counter = Counter()
     for w, n in sw.items():
-        for p in zip(w, w[1:]):
+        for p in pairwise(w):
             pairs[p] += n
     for p, n in pairs.most_common(4):
         print(f"    {p[0].decode()}{p[1].decode()}: {n}")

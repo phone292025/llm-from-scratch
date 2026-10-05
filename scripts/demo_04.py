@@ -133,7 +133,7 @@ def main() -> None:
         rank = int((probs > probs[paris]).sum()) + 1
         print(f"  {prompt!r}")
         print("    top-5: " + ", ".join(
-            f"{tok.decode([i])!r} {v:.3f}" for v, i in zip(top.values, top.indices)))
+            f"{tok.decode([i])!r} {v:.3f}" for v, i in zip(top.values, top.indices, strict=True)))
         print(f"    ' Paris': p={probs[paris]:.4f}, rank {rank}\n")
     print("  Not the argmax - GPT-2 124M is small. But top-5, and 2nd once the sentence forces")
     print("  a city. A misplaced weight would put it nowhere near.")

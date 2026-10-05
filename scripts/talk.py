@@ -21,7 +21,6 @@ where they are tested. This file is only the conversation loop.
 from __future__ import annotations
 
 import argparse
-import sys
 
 import torch
 

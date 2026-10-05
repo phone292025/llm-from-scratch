@@ -14,7 +14,7 @@ from torch import nn
 from llm.block import PostNormBlock, TransformerBlock
 from llm.config import SMALL
 from llm.console import use_utf8
-from llm.ffn import GELU, make_ffn
+from llm.ffn import GELU
 from llm.norms import LayerNorm, RMSNorm
 
 CFG = replace(SMALL, context_length=64, attn="manual", dropout=0.0)

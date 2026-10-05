@@ -19,6 +19,7 @@ import json
 import os
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
+from itertools import pairwise
 from pathlib import Path
 
 import regex
@@ -134,7 +135,7 @@ def count_file(
 
     split_token = specials[0].encode("utf-8")
     bounds = find_chunk_boundaries(path, num_workers * 4, split_token)
-    jobs = [(path, a, b, specials, pattern) for a, b in zip(bounds, bounds[1:])]
+    jobs = [(path, a, b, specials, pattern) for a, b in pairwise(bounds)]
 
     from multiprocessing import Pool
 
@@ -149,7 +150,7 @@ def count_file(
 
 
 def _pairs(word: tuple[bytes, ...]) -> Iterator[Pair]:
-    return zip(word, word[1:])
+    return pairwise(word)
 
 
 def _merge_word(word: tuple[bytes, ...], pair: Pair, merged: bytes) -> tuple[bytes, ...]:
@@ -368,7 +369,7 @@ class Tokenizer:
             safe = len(buffer) - hold - self.LOOKAHEAD
 
             cut = 0
-            for start, end, kind, piece in self._units(buffer, allow_special):
+            for _start, end, kind, piece in self._units(buffer, allow_special):
                 if end > safe:
                     break
                 if kind == "special":
@@ -423,7 +424,7 @@ class Tokenizer:
         while len(parts) > 1:
             best_rank = None
             best: Pair | None = None
-            for pair in zip(parts, parts[1:]):
+            for pair in pairwise(parts):
                 rank = self._ranks.get(pair)
                 if rank is not None and (best_rank is None or rank < best_rank):
                     best_rank, best = rank, pair

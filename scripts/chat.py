@@ -108,7 +108,7 @@ class Chat:
                     "entropy": entropy,
                     "top": [
                         (self.tok.decode([int(i)]), float(p))
-                        for p, i in zip(top.values, top.indices)
+                        for p, i in zip(top.values, top.indices, strict=True)
                     ],
                 })
         print(RESET)
@@ -146,8 +146,8 @@ class Chat:
             print(f"      it also considered: {options}")
 
         print(f"\n{DIM}Yellow is what it picked. Sampling does not always take the likeliest word --")
-        print(f"that is what makes the stories vary; /temp 0 makes it always take the top one.")
-        print(f"These are the real probabilities it computed over all 10,000 words, not a")
+        print("that is what makes the stories vary; /temp 0 makes it always take the top one.")
+        print("These are the real probabilities it computed over all 10,000 words, not a")
         print(f"description of them.{RESET}")
 
     # -- commands -----------------------------------------------------------------------------
@@ -221,10 +221,10 @@ def main() -> None:
           f"{cfg.vocab_size:,}-token vocabulary, {cfg.context_length}-token memory, on {device}")
     if args.instruct:
         print(f"{DIM}Instruction-tuned: ask it something and it will try to answer.")
-        print(f"Try: Give three tips for staying healthy    or    Explain gravity to a child")
+        print("Try: Give three tips for staying healthy    or    Explain gravity to a child")
     else:
         print(f"{DIM}It continues text; it does not answer questions. Give it the start of a story.")
-        print(f"Try: Once upon a time    or    Tom found a key in the garden")
+        print("Try: Once upon a time    or    Tom found a key in the garden")
     print(f"/help for commands, /think on to see what it is weighing, /quit to leave.{RESET}")
 
     chat = Chat(model, tok, device, instruct=args.instruct)

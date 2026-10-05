@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from itertools import pairwise
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -70,7 +71,7 @@ def encode_file(
     src, dst = Path(src), Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     bounds = find_chunk_boundaries(src, max(1, workers) * 8, EOT.encode("utf-8"))
-    jobs = [(str(src), a, b) for a, b in zip(bounds, bounds[1:])]
+    jobs = [(str(src), a, b) for a, b in pairwise(bounds)]
 
     start = time.perf_counter()
     if workers <= 1:

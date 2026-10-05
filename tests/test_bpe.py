@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from itertools import pairwise
 
 import pytest
 
@@ -60,7 +61,7 @@ def _naive_train(word_counts: dict, n_merges: int) -> list:
     for _ in range(n_merges):
         pairs: Counter = Counter()
         for word, n in words.items():
-            for pair in zip(word, word[1:]):
+            for pair in pairwise(word):
                 pairs[pair] += n
         if not pairs:
             break
@@ -99,7 +100,7 @@ def _generate_corpus(seed: int = 0, n_words: int = 4000) -> str:
     weights = [1 / (i + 1) for i in range(len(words))]
     extras = ["I'll", "don't", "it's", "café", "naïve", "3.14", "1,000", "2024", "Straße", "日本"]
     out = []
-    for i in range(n_words):
+    for _ in range(n_words):
         w = rng.choice(extras) if rng.random() < 0.03 else rng.choices(words, weights)[0]
         if not out or out[-1].endswith((".", "!", "?")):
             w = w.capitalize()
@@ -339,7 +340,7 @@ def test_encode_iterable_matches_encode_under_any_chunking(
     pieces = ["the cat", " sat", "   ", "\n\n", "  on", EOT, "mat.", "\t", "café", "!!"]
     text = "".join(rng.choice(pieces) for _ in range(80))
     cuts = sorted(rng.sample(range(1, len(text)), k=min(25, len(text) - 1)))
-    chunks = [text[a:b] for a, b in zip([0, *cuts], [*cuts, len(text)])]
+    chunks = [text[a:b] for a, b in zip([0, *cuts], [*cuts, len(text)], strict=True)]
 
     expected = trained.encode(text, allow_special=allow_special)
     assert list(trained.encode_iterable(chunks, allow_special=allow_special)) == expected

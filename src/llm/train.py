@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import itertools
 import math
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np

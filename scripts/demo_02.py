@@ -11,7 +11,7 @@ from dataclasses import replace
 
 import torch
 
-from llm.attention import CausalSelfAttention, MultiHeadWrapper, SingleHeadAttention
+from llm.attention import CausalSelfAttention, MultiHeadWrapper
 from llm.config import SMALL
 from llm.console import use_utf8
 from llm.tokenizer import BPETokenizer
@@ -95,7 +95,7 @@ def main() -> None:
     for h in range(min(4, full.shape[0])):
         row = full[h, -1]
         top = torch.topk(row, 3)
-        picks = ", ".join(f"{labels[i]}={v:.2f}" for v, i in zip(top.values, top.indices))
+        picks = ", ".join(f"{labels[i]}={v:.2f}" for v, i in zip(top.values, top.indices, strict=True))
         print(f"  head {h}: last token attends most to  {picks}")
     print("\nUntrained, so these are random -- but after training they specialize, one head on")
     print("grammatical agreement, another on coreference. One head would have to average them.")

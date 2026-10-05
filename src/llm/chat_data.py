@@ -26,7 +26,11 @@ from typing import Iterable, Protocol, Sequence
 
 from torch.utils.data import Dataset
 
-from llm.instruct import IGNORE, collate, length_grouped_batches  # noqa: F401  (re-exported)
+from llm.instruct import (  # noqa: F401  (re-exported)
+    IGNORE,
+    collate,
+    length_grouped_batches,
+)
 
 #: One turn: {"role": "system" | "user" | "assistant", "content": str}.
 Message = dict[str, str]
