@@ -61,6 +61,20 @@ def last_samples(log: list[str]) -> tuple[int | None, list[tuple[str, str]]]:
     return step, pairs
 
 
+def read_metrics(path: Path) -> list[dict]:
+    """The run's metric records. Training appends to this file while the page reads it, so the
+    last line can be half-written: it is skipped, and arrives whole five seconds later."""
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
 class Run:
     def __init__(self, folder: Path, started: float | None = None) -> None:
         self.folder = folder
@@ -72,9 +86,7 @@ class Run:
         total = next((int(m.group(1).replace(",", "")) for line in log
                       if (m := SCHEDULE.search(line))), None)
         steps = [m for line in log if (m := STEP.match(line))]
-        metrics = [json.loads(line) for line in
-                   (self.folder / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
-                   if line.strip()] if (self.folder / "metrics.jsonl").exists() else []
+        metrics = read_metrics(self.folder / "metrics.jsonl")
         done = int(steps[-1].group(1)) + 1 if steps else 0
         finished = "done in" in text
         if self.started is None and not finished:
