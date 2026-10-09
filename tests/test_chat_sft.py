@@ -405,7 +405,8 @@ def test_checkpoints_record_their_recipe(tmp_path, opt) -> None:
 #: Every file of chat training data in the repo: the hand-written conversations, the DPO pairs,
 #: and the model's own answers that the on-policy pairs are built from.
 TRAINING_DATA = ["data/chat/persona.jsonl", "data/chat/preferences.jsonl",
-                 "data/chat/own_answers.jsonl", "data/chat/preferences_onpolicy.jsonl"]
+                 "data/chat/own_answers.jsonl", "data/chat/preferences_onpolicy.jsonl",
+                 "data/chat/preferences_onpolicy_first.jsonl"]
 
 
 def trained_texts(normal) -> set[str]:

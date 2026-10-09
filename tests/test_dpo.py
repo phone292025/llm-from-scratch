@@ -329,6 +329,7 @@ def test_every_pair_fits_the_default_max_len_whole() -> None:
 
 OWN = Path("data/chat/own_answers.jsonl")
 ONPOLICY = Path("data/chat/preferences_onpolicy.jsonl")
+ONPOLICY_FIRST = Path("data/chat/preferences_onpolicy_first.jsonl")
 
 
 def _onpolicy_builder():
@@ -345,23 +346,67 @@ def test_every_prompt_has_the_model_s_answer_and_a_verdict() -> None:
     assert all(o["verdict"] in ("good", "bad") and o["why"].strip() for o in own)
 
 
-def test_the_onpolicy_file_is_what_its_builder_writes() -> None:
+def test_the_onpolicy_files_are_what_their_builder_writes() -> None:
     builder = _onpolicy_builder()
-    assert load_records(ONPOLICY) == builder.build(load_records(DATA), load_records(OWN))
+    pairs, own = load_records(DATA), load_records(OWN)
+    assert load_records(ONPOLICY) == builder.build(pairs, own)
+    assert load_records(ONPOLICY_FIRST) == builder.build(pairs, own, shorten=True)
 
 
 def test_only_answers_judged_bad_are_lowered() -> None:
-    """The point of the file: the rejected side is the model's own mistake. And only a mistake --
+    """The point of the files: the rejected side is the model's own mistake. And only a mistake --
     lowering an answer that is fine would teach the model to stop giving it."""
-    trim = _onpolicy_builder().trim
-    for pair, own, made in zip(load_records(DATA), load_records(OWN), load_records(ONPOLICY),
-                               strict=True):
-        assert made["chosen"] == pair["chosen"]
+    builder = _onpolicy_builder()
+    for pair, own, whole, first in zip(load_records(DATA), load_records(OWN),
+                                       load_records(ONPOLICY), load_records(ONPOLICY_FIRST),
+                                       strict=True):
+        assert whole["chosen"] == first["chosen"] == pair["chosen"]
         if own["verdict"] == "bad":
-            assert made["rejected"] == (own["answer"] if own["finished"] else trim(own["answer"]))
+            assert whole["rejected"] == (own["answer"] if own["finished"]
+                                         else builder.trim(own["answer"]))
+            assert first["rejected"] == builder.opening(own["answer"], own["keep"])
         else:
-            assert made == pair
-    assert [problem_with(r) for r in load_records(ONPOLICY)] == [None] * len(load_records(OWN))
+            assert whole == first == pair
+    for path in (ONPOLICY, ONPOLICY_FIRST):
+        assert [problem_with(r) for r in load_records(path)] == [None] * len(load_records(OWN))
+
+
+def test_every_mistake_records_where_it_is_made() -> None:
+    """Cutting at one sentence would lower a correct answer where the mistake comes second:
+    "No, I am not. I am a large language model trained by OpenAI..." """
+    for own in load_records(OWN):
+        if own["verdict"] == "bad":
+            assert own["keep"] >= 1
+        else:
+            assert own["keep"] is None
+
+
+def test_sentences_step_over_initials_decimals_and_quotes() -> None:
+    sentences = _onpolicy_builder().sentences
+    assert sentences("Directed by David O. Russell. Stars Michael Caine.") == [
+        "Directed by David O. Russell.", "Stars Michael Caine."]
+    assert sentences("Version 2.5 is out. In the U.S. too.") == [
+        "Version 2.5 is out.", "In the U.S. too."]
+    assert sentences('"Knowledge is power." - Aldric Venn') == [
+        '"Knowledge is power."', "- Aldric Venn"]
+
+
+def test_shortened_mistakes_are_about_as_long_as_the_honest_answers() -> None:
+    """Run 4 lowered the model's mistakes whole: 199 characters on average against 105 for the
+    chosen answers, and it learned "short beats long" -- terse answers, and repetition loops."""
+    def balance(path: Path) -> tuple[float, float]:
+        hand = load_records(DATA)
+        replaced = [r for r, h in zip(load_records(path), hand, strict=True)
+                    if r["rejected"] != h["rejected"]]
+        ratio = (sum(len(r["rejected"]) for r in replaced)
+                 / sum(len(r["chosen"]) for r in replaced))
+        longer = sum(len(r["chosen"]) > len(r["rejected"]) for r in replaced) / len(replaced)
+        return ratio, longer
+
+    ratio, longer = balance(ONPOLICY_FIRST)
+    assert 0.75 < ratio < 1.33 and 0.35 < longer < 0.65, (ratio, longer)
+    ratio, _ = balance(ONPOLICY)
+    assert ratio > 1.8, "run 4's whole mistakes are the imbalance this file exists to remove"
 
 
 def test_a_cut_off_reply_ends_at_its_last_full_sentence() -> None:
