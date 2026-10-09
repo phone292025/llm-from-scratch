@@ -12,6 +12,21 @@ import json
 import pytest
 import torch
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _cpu_only():
+    """Every test runs on the CPU, as in CI, and none may start CUDA at all.
+
+    Session-scoped so it is in place before the session fixtures below run. Without it, saving a
+    chat checkpoint asks CUDA for its random state, and that alone opens a GPU context of a few
+    hundred MB -- enough to push a training run already holding 7.5 of 8 GB over the edge.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(torch.cuda, "is_available", lambda: False)
+        yield
+    assert not torch.cuda.is_initialized(), "a test started CUDA; tests must stay on the CPU"
+
+
 PERSONA = [
     [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hey! What's up?"}],
     [{"role": "user", "content": "what sup"},
