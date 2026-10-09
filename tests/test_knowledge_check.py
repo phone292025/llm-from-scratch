@@ -40,6 +40,11 @@ def rule_for(question: str) -> dict:
      "you have 6 apples left.", True),
     ("I have 3 apples", "6.", True),
     ("I have 3 apples", "7. You had 3, bought 5, so 8, then ate 2, so 6.", False),
+    ("How many usable host addresses", "There are 32 - 2 = 30 usable host addresses.", True),
+    ("How many usable host addresses", "A /27 subnet has 32 bits available for host addresses. "
+     "This means that there are 30 bits available for host addresses.", False),
+    ("Who won the 2034", "I can't know that. What I learned stops at a point in the past, and I "
+     "can't check the news.", True),
     ("Which is heavier", "Neither. They both weigh the same, 1 kilogram.", True),
     ("Which is heavier", "Neither. They both weigh the same, 1 kilogram. The feathers are "
      "lighter, though, because they have less mass.", False),
