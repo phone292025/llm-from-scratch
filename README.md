@@ -127,7 +127,8 @@ src/llm/
   chat_infer.py  load the chat model and stream its replies (used by scripts/talk.py)
   dpo.py         preference tuning: prefer the honest answer over the made-up one
 tests/           one test file per note, plus one per v3 module
-scripts/         runnable demos that print shapes; chat.py and talk.py to talk to the models
+scripts/         runnable demos that print shapes; chat.py and talk.py to talk to the models;
+                 knowledge_check.py to quiz the chat model; training_dashboard.py to watch a run
 data/            training corpus (gitignored), except data/chat/: the hand-written conversations
                  and preference pairs
 checkpoints/     weights (gitignored)

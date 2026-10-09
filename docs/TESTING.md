@@ -10,10 +10,19 @@ Every command here was run and passes. Paths assume you are in `C:\Users\phone\D
 .venv/Scripts/python -m pytest tests/ -q
 ```
 
-481 tests, about 70 seconds, all on the CPU. If this is green, the implementation is correct as
+508 tests, about 70 seconds, all on the CPU. If this is green, the implementation is correct as
 far as anything can tell you without training a model -- and that now includes training: both
 training commands are run end to end on tiny models, killed, resumed, and compared with runs that
 never stopped.
+
+"All on the CPU" is enforced, not hoped for: a session-wide fixture in `tests/conftest.py` hides
+CUDA before anything runs, and fails the session if a test starts it anyway. So the suite gives
+the same answers here as in CI, and it can run while a training run holds the GPU. While one
+does, keep the tests from taking every core:
+
+```bash
+OMP_NUM_THREADS=2 .venv/Scripts/python -m pytest tests/ -q
+```
 
 Per note, when you want to know *which* part broke:
 
@@ -99,6 +108,22 @@ which is why they are worth more than their count suggests.
 ---
 
 ## Watch it work, rather than watch it pass
+
+A training run, live in the browser -- steps left, the time left, the loss curve, the GPU, and
+the newest answers to the never-seen probes. It only reads the run's log:
+
+```bash
+.venv/Scripts/python scripts/training_dashboard.py --run checkpoints/chat-v2
+```
+
+The chat model's knowledge check, and the same grading applied again to saved logs. The rules
+were tightened after they passed answers a reader fails at once, so compare models by re-grading
+their logs together rather than by the scores printed at the time:
+
+```bash
+.venv/Scripts/python scripts/knowledge_check.py --adapter checkpoints/chat-v2
+.venv/Scripts/python scripts/knowledge_check.py --rescore checkpoints/chat-dpo/knowledge_check_before.log checkpoints/chat-v2/knowledge_check.log
+```
 
 Each note has a demo that prints what it is doing. These are the interesting ones to read.
 

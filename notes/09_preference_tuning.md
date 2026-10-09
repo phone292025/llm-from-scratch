@@ -164,7 +164,7 @@ probabilities. The real test is to run the knowledge check again and read the an
 .venv/Scripts/python -m llm.dpo --sft checkpoints/chat --out checkpoints/chat-dpo3
 ```
 
-Defaults: `beta` 0.1, learning rate 2e-5 — the best of the three runs in §8 — and 3 epochs of
+Defaults: `beta` 0.1, learning rate 2e-5 — run 3's, see §8 — and 3 epochs of
 2 × 4 pairs per step. With 70 training pairs that is 24 optimizer steps: 1.3 minutes of
 training on this laptop's GPU, once the model has loaded. Then:
 
@@ -176,8 +176,11 @@ training on this laptop's GPU, once the model has loaded. Then:
 ## 8. Five runs
 
 All five start from the finished chat model of note 8, and all are judged by the same
-27-question knowledge check, on which that model scores 21. The keyword score is the headline,
-not the verdict: every answer was read.
+27-question knowledge check. The keyword score is the headline, not the verdict: every answer was
+read. Reading them showed the first rules passing answers a reader fails at once — any "who made
+you" without the word OpenAI, Zorblax as "a fictional character" with a made-up author. So the
+rules were tightened, and every log graded again (`knowledge_check.py --rescore`). On the strict
+rules the starting model scores 19.
 
 | | run 1 | run 2 | run 3 | run 4 | run 5 |
 |---|---|---|---|---|---|
@@ -185,7 +188,8 @@ not the verdict: every answer was read.
 | learning rate | 5e-5 | 5e-6 | 2e-5 | 2e-5 | 2e-5 |
 | held-out loss at the end | 0.029 | 0.583 | 0.371 | 0.272 | 0.277 |
 | held-out shift: chosen, rejected | −0.8, −42.0 nats | +1.6, −1.0 nats | +2.5, −9.2 nats | +3.2, −11.6 nats | +3.8, −9.8 nats |
-| knowledge check | 20/27 | 21/27 | 23/27 | 18/27 | 20/27 |
+| knowledge check, first rules | 20/27 | 21/27 | 23/27 | 18/27 | 20/27 |
+| knowledge check, strict (start: 19) | **19/27** | **19/27** | **19/27** | **15/27** | **16/27** |
 | training time | 1.1 min | 1.2 min | 1.3 min | 1.1 min | 1.1 min |
 
 The held-out losses of runs 4 and 5 are not comparable with the others: their held-out pairs
@@ -206,16 +210,18 @@ moved the right way, chosen up and rejected down. But they moved nowhere near en
 what greedy decoding picks: the quiz answers are, almost word for word, the original's, inventions
 included.
 
-**Run 3: in between, and a subtler failure.** It has the best score, 23 of 27. It answered the
-/27 question correctly for the first time (30 hosts), gave a clean *"Friday, networking"*, and
-said the feathers and bricks weigh the same. But the inventions changed shape rather than
-stopping:
+**Run 3: in between, and a subtler failure.** It had the best score on the first rules, 23 of
+27; on the strict ones, 19, the same as the model it started from. It answered the /27 question
+correctly for the first time (30 hosts), gave a clean *"Friday, networking"*, and said the
+feathers and bricks weigh the same. But it also opened the apples answer with a wrong *"7."*, and
+the inventions changed shape rather than stopping:
 - Zorblax Quentin became *"a fictional character created by the author of The Phantom of the
   Opera"*.
 - The 2034 World Cup was *"postponed due to the COVID-19 pandemic … cancelled in 2022"*.
 - Asked who made it, it told a story of GPT-3, Open Assistant and Microsoft.
 
-The keyword check passed two of those. Read, none of the three is honest.
+The first rules passed two of those, which is where its 23 came from. Read, none of the three is
+honest.
 
 **Why: the rejected answers were never the model's own.** DPO lowers the probability of the
 answers in the data, and mine were written by hand — *"Theodora Kimbrell-Ashe was a British
@@ -266,9 +272,9 @@ answers that spelled the question out were the ones that got it right.
 the chosen answer won all twelve held-out pairs. What it could not do, with 82 pairs on a 1.7B
 model, is teach the skill underneath — noticing that a name is one it has never seen. Only run 1
 stopped the quiz's inventions, and it broke much else on the way. Runs 3 to 5 swapped the
-inventions for others, or left them as they were. Every surface difference between the two
-sides of a pair, from dashes to sentence shape, was learned before honesty was. The levers
-left, roughly in order:
+inventions for others, or left them as they were. Graded strictly, no run beat the model it
+started from. Every surface difference between the two sides of a pair, from dashes to sentence
+shape, was learned before honesty was. The levers left, roughly in order:
 
 - **Both answers in the model's own style.** Sample it several times per prompt, and keep its
   own honest declines as the chosen answers, so nothing but the content differs.
@@ -277,7 +283,9 @@ left, roughly in order:
   decline directly instead of by comparison.
 
 None of the five replaces the chat model of note 8, which `talk.bat` still loads.
-`--adapter checkpoints/chat-dpo3` talks to run 3.
+`--adapter checkpoints/chat-dpo3` talks to run 3. The default learning rate of `llm.dpo` is run 3's
+2e-5: the one setting that changed answers without breaking what no pair was about, though not
+the one that made the model honest.
 
 ## Tests
 

@@ -141,6 +141,13 @@ recited at loss 0.008, counted as much as a 695-token explanation. Same model, s
 conversations: **0.8800 per conversation, 1.1881 per token.** Recipe 2 splits first and repeats
 into training only; the recipe is stored with each checkpoint so an old run resumes on its own data.
 
+**Downloaded conversations bring their assistant's identity with them.** OASST2's assistant was
+Open Assistant, by LAION, and says so: *"I'm an AI language model developed by Open Assistant"*,
+*"all of my code can be found on my GitHub page"*. 73 of the 3,000 conversations used here name
+it. Asked who developed it, the finished model answered *"I was developed by Open Assistant, an
+open-source project"*, nearly word for word. Recipe 3 drops those 73 before the split. UltraChat
+has no such lines; its publishers had already removed them.
+
 ## 6. Streaming the reply
 
 Two bugs in the first `talk.py`, which had never been run:
