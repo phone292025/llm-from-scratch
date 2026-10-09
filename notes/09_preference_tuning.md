@@ -173,20 +173,23 @@ training on this laptop's GPU, once the model has loaded. Then:
 .venv/Scripts/python scripts/knowledge_check.py --adapter checkpoints/chat-dpo3 --log checkpoints/chat-dpo3/knowledge_check.log
 ```
 
-## 8. Three runs
+## 8. Four runs
 
-All three start from the finished chat model of note 8, and all are judged by the same
+All four start from the finished chat model of note 8, and all are judged by the same
 27-question knowledge check, on which that model scores 21. The keyword score is the headline,
 not the verdict: every answer was read.
 
-| | run 1 | run 2 | run 3 |
-|---|---|---|---|
-| pairs | 69, the first version | 82, style balanced | 82, style balanced |
-| learning rate | 5e-5 | 5e-6 | 2e-5 |
-| held-out loss at the end | 0.029 | 0.583 | 0.371 |
-| held-out shift: chosen, rejected | −0.8, −42.0 nats | +1.6, −1.0 nats | +2.5, −9.2 nats |
-| knowledge check | 20/27 | 21/27 | 23/27 |
-| training time | 1.1 min | 1.2 min | 1.3 min |
+| | run 1 | run 2 | run 3 | run 4 |
+|---|---|---|---|---|
+| pairs | 69, the first version | 82, style balanced | 82, style balanced | 82, the model's own mistakes in 31 |
+| learning rate | 5e-5 | 5e-6 | 2e-5 | 2e-5 |
+| held-out loss at the end | 0.029 | 0.583 | 0.371 | 0.272 |
+| held-out shift: chosen, rejected | −0.8, −42.0 nats | +1.6, −1.0 nats | +2.5, −9.2 nats | +3.2, −11.6 nats |
+| knowledge check | 20/27 | 21/27 | 23/27 | 18/27 |
+| training time | 1.1 min | 1.2 min | 1.3 min | 1.1 min |
+
+Run 4's held-out loss is not comparable with the others: its held-out pairs have different
+rejected answers.
 
 **Run 1: too strong, and it learned the wrong thing.** The training loss fell to 0.005, margins
 near 5.5: a shift of 55 nats in relative log-probability. It did stop inventing. Asked about
@@ -220,9 +223,31 @@ chemist …"*. This model's real confabulations are different text. Lower the on
 probability flows to neighbouring inventions the file never mentions. The usual remedy is
 **on-policy** pairs: put the prompts to the chat model itself, keep what it actually says as the
 rejected answer, and write only the honest one. Then training lowers the mistakes this model
-really makes. That is the next experiment.
+really makes.
 
-None of the three replaces the chat model of note 8, which `talk.bat` still loads.
+**Run 4: the model's own mistakes, and a new confound.** `scripts/sample_own_answers.py` put all
+82 prompts to the chat model (greedy, as the knowledge check asks: 122 seconds). Each answer was
+read and judged. 31 were real mistakes: all twelve invented people and works got a biography, a
+plot or a band; seven identity answers named Open Assistant or GPT-3.5; all three false
+premises were played along with. The other 51 were acceptable, borderline ones included,
+because lowering an acceptable answer teaches the model to stop giving it.
+`scripts/make_onpolicy_pairs.py` swapped the 31 in as the rejected side, everything else as in
+run 3.
+
+It scored worst of all, 18 of 27, and failed in a new way. It was terse — *"Yangon."*,
+*"Bricks."*, *"126."* for a /27 — and three times it was stuck in a loop:
+*"11111111.11111111…"* for a subnet mask. The inventions were untouched: Zorblax Quentin got a
+full biography, the 2034 World Cup a final won 1–0 with a Griezmann goal.
+
+The cause is length. The model's mistakes are long: 199 characters on average in the 31
+replaced pairs, against 105 for their chosen answers, where run 3's hand-written rejected
+answers averaged 88. So run 4 taught "short beats long", and lowered fluent paragraphs as
+such: hence the terseness, and the loops. It changed two things at once, so it cannot say
+whether the model's own mistakes help. The fair test trims each one to its first sentence,
+where the false claim is made. That is the part that decides what the model writes, at about
+the length of a chosen answer.
+
+None of the four replaces the chat model of note 8, which `talk.bat` still loads.
 `--adapter checkpoints/chat-dpo3` talks to run 3.
 
 ## Tests
