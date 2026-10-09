@@ -10,7 +10,7 @@ Every command here was run and passes. Paths assume you are in `C:\Users\phone\D
 .venv/Scripts/python -m pytest tests/ -q
 ```
 
-480 tests, about 70 seconds, all on the CPU. If this is green, the implementation is correct as
+481 tests, about 70 seconds, all on the CPU. If this is green, the implementation is correct as
 far as anything can tell you without training a model -- and that now includes training: both
 training commands are run end to end on tiny models, killed, resumed, and compared with runs that
 never stopped.
