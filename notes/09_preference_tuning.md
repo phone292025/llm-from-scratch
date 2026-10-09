@@ -173,23 +173,23 @@ training on this laptop's GPU, once the model has loaded. Then:
 .venv/Scripts/python scripts/knowledge_check.py --adapter checkpoints/chat-dpo3 --log checkpoints/chat-dpo3/knowledge_check.log
 ```
 
-## 8. Four runs
+## 8. Five runs
 
-All four start from the finished chat model of note 8, and all are judged by the same
+All five start from the finished chat model of note 8, and all are judged by the same
 27-question knowledge check, on which that model scores 21. The keyword score is the headline,
 not the verdict: every answer was read.
 
-| | run 1 | run 2 | run 3 | run 4 |
-|---|---|---|---|---|
-| pairs | 69, the first version | 82, style balanced | 82, style balanced | 82, the model's own mistakes in 31 |
-| learning rate | 5e-5 | 5e-6 | 2e-5 | 2e-5 |
-| held-out loss at the end | 0.029 | 0.583 | 0.371 | 0.272 |
-| held-out shift: chosen, rejected | −0.8, −42.0 nats | +1.6, −1.0 nats | +2.5, −9.2 nats | +3.2, −11.6 nats |
-| knowledge check | 20/27 | 21/27 | 23/27 | 18/27 |
-| training time | 1.1 min | 1.2 min | 1.3 min | 1.1 min |
+| | run 1 | run 2 | run 3 | run 4 | run 5 |
+|---|---|---|---|---|---|
+| pairs | 69, the first version | 82, style balanced | 82, style balanced | 82, the model's own mistakes in 31 | as run 4, mistakes cut short |
+| learning rate | 5e-5 | 5e-6 | 2e-5 | 2e-5 | 2e-5 |
+| held-out loss at the end | 0.029 | 0.583 | 0.371 | 0.272 | 0.277 |
+| held-out shift: chosen, rejected | −0.8, −42.0 nats | +1.6, −1.0 nats | +2.5, −9.2 nats | +3.2, −11.6 nats | +3.8, −9.8 nats |
+| knowledge check | 20/27 | 21/27 | 23/27 | 18/27 | 20/27 |
+| training time | 1.1 min | 1.2 min | 1.3 min | 1.1 min | 1.1 min |
 
-Run 4's held-out loss is not comparable with the others: its held-out pairs have different
-rejected answers.
+The held-out losses of runs 4 and 5 are not comparable with the others: their held-out pairs
+have different rejected answers.
 
 **Run 1: too strong, and it learned the wrong thing.** The training loss fell to 0.005, margins
 near 5.5: a shift of 55 nats in relative log-probability. It did stop inventing. Asked about
@@ -247,7 +247,36 @@ whether the model's own mistakes help. The fair test trims each one to its first
 where the false claim is made. That is the part that decides what the model writes, at about
 the length of a chosen answer.
 
-None of the four replaces the chat model of note 8, which `talk.bat` still loads.
+**Run 5: the same mistakes, cut to the sentences that make them.** Usually that is the first
+sentence. Six answers keep two, because their first sentence is right and the error comes
+second: *"No, I am not. I am a large language model trained by OpenAI…"*. The cut mistakes
+average 93 characters against 105. Run 5 scored 20 of 27. The length confound was real: it no
+longer loops on the Cisco question, and the feathers and bricks weigh the same again. The rest
+of run 4's damage stayed: *"Yangon."*, *"126"* for a /27, the same *"11111111.…"* loop for
+a /26. So did the inventions, word for word run 4's: Zorblax Quentin born in 1740, France
+beating Germany in 2034, mohinga as a Bengali dish.
+
+The reason is style again, from the other side. The model's own mistakes come in the model's
+own style, which restates the question: *"The band that released the album … is"*, *"The town
+of Little Hexley was founded in"*. The hand-written chosen answers never do. Lowering one
+against the other taught "don't restate the question". Hence the bare *"Yangon."*, when the
+answers that spelled the question out were the ones that got it right.
+
+**What five runs say.** DPO did what it is built to do every time: by the end of every run,
+the chosen answer won all twelve held-out pairs. What it could not do, with 82 pairs on a 1.7B
+model, is teach the skill underneath — noticing that a name is one it has never seen. Only run 1
+stopped the quiz's inventions, and it broke much else on the way. Runs 3 to 5 swapped the
+inventions for others, or left them as they were. Every surface difference between the two
+sides of a pair, from dashes to sentence shape, was learned before honesty was. The levers
+left, roughly in order:
+
+- **Both answers in the model's own style.** Sample it several times per prompt, and keep its
+  own honest declines as the chosen answers, so nothing but the content differs.
+- **Far more pairs.** Hundreds of invented names rather than twelve.
+- **Retrain the chat model itself** on the 150 hand-written conversations, which teach the
+  decline directly instead of by comparison.
+
+None of the five replaces the chat model of note 8, which `talk.bat` still loads.
 `--adapter checkpoints/chat-dpo3` talks to run 3.
 
 ## Tests

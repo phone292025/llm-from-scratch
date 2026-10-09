@@ -111,14 +111,16 @@ conversation, keeps what it was told across turns, and answers four of six promp
 in training well. Not yet: it believes OpenAI made it, and it cannot hold a conversation in
 Burmese. Both are data. The full account is [note 8](../notes/08_chat_model.md).
 
-**Preference tuning: built, run four times, not solved.** The knowledge check then caught the
+**Preference tuning: built, run five times, not solved.** The knowledge check then caught the
 model inventing a physicist's biography and a future World Cup winner -- mistakes imitation
 cannot train out, since it is never shown a bad answer marked as bad. `src/llm/dpo.py` trains on
 pairs instead: 82 hand-written prompts, each with an honest answer and a bad one. Too strong a
 run broke unrelated skills; too weak changed nothing; the middle swapped one invention for
 another, because the bad answers were written by hand rather than taken from the model. Using
-the model's own mistakes made it worse, but those were twice as long as the good answers, so the
-run learned "short beats long". Next: the same, trimmed to the first sentence.
+the model's own mistakes made it worse: first they were twice as long as the good answers, then,
+cut to length, they were still in the model's style and the good answers in mine. Every
+difference between the two sides was learned before honesty was. Next: both answers from the
+model itself, far more pairs, or retraining the chat model on the new conversations.
 [Note 9 section 8](../notes/09_preference_tuning.md).
 
 ---

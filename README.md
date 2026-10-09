@@ -23,7 +23,7 @@ Nothing gets coded until its note is read.
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 42 tests pass** |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] **built, 44 tests pass** — `MODERN` builds and trains |
 | 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [x] **built, 85 tests pass** — trained, 759 steps |
-| 9 | [Teaching what not to say](notes/09_preference_tuning.md) | `dpo.py` | [x] **built, 37 tests pass** — four runs on the chat model, none good enough yet |
+| 9 | [Teaching what not to say](notes/09_preference_tuning.md) | `dpo.py` | [x] **built, 37 tests pass** — five runs on the chat model, none good enough yet |
 
 
 ### Beyond the notes
