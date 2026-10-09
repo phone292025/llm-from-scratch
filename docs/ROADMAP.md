@@ -111,6 +111,12 @@ conversation, keeps what it was told across turns, and answers four of six promp
 in training well. Not yet: it believes OpenAI made it, and it cannot hold a conversation in
 Burmese. Both are data. The full account is [note 8](../notes/08_chat_model.md).
 
+**Built, not yet run: preference tuning.** The knowledge check then caught the model inventing
+a physicist's biography and a future World Cup winner -- mistakes imitation cannot train out,
+since it is never shown a bad answer marked as bad. `src/llm/dpo.py` trains on pairs instead:
+69 hand-written prompts, each with an honest answer and the kind of answer the model gave.
+[Note 9](../notes/09_preference_tuning.md) explains it; the results go there after the run.
+
 ---
 
 ## Deliberately not doing
@@ -119,7 +125,5 @@ Worth naming so they are choices rather than omissions:
 
 - **Multi-GPU / FSDP** — one laptop GPU. Irrelevant.
 - **MoE** — interesting, but the memory profile is wrong for 8 GB.
-- **RLHF / DPO** — a whole project of its own, and it needs preference data I do not have.
-- **Writing a BPE trainer** — note 1 explains the algorithm; implementing it teaches compression,
-  not language modeling. Revisit only if training on Burmese, where GPT-2's vocab is genuinely bad
-  and a custom tokenizer would be the single highest-impact change available.
+- **RLHF with a reward model and PPO** — four models in memory at once. DPO learns from the same
+  kind of preference pairs with one, and fits on the laptop; see note 9.

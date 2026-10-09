@@ -22,7 +22,8 @@ Nothing gets coded until its note is read.
 | 5 | [Training](notes/05_training.md) | `train.py` `optim.py` `losses.py` `checkpoint.py` | [x] **built, 43 tests pass** |
 | 6 | [Generation](notes/06_generation.md) | `generate.py` `kv_cache.py` | [x] **built, 42 tests pass** |
 | 7 | [Modernizing](notes/07_modern_upgrades.md) | RoPE, RMSNorm, SwiGLU, GQA | [x] **built, 44 tests pass** — `MODERN` builds and trains |
-| 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [x] **built, 78 tests pass** — trained, 759 steps |
+| 8 | [A model you can talk to](notes/08_chat_model.md) | `chat_data.py` `chat_sft.py` `chat_infer.py` | [x] **built, 85 tests pass** — trained, 759 steps |
+| 9 | [Teaching what not to say](notes/09_preference_tuning.md) | `dpo.py` | [x] **built, 36 tests pass** — not yet run on the real model |
 
 
 ### Beyond the notes
@@ -124,9 +125,11 @@ src/llm/
   chat_data.py   multi-turn ChatML conversations, every assistant turn graded
   chat_sft.py    LoRA fine-tune Qwen3-1.7B-Base into a chat model
   chat_infer.py  load the chat model and stream its replies (used by scripts/talk.py)
+  dpo.py         preference tuning: prefer the honest answer over the made-up one
 tests/           one test file per note, plus one per v3 module
 scripts/         runnable demos that print shapes; chat.py and talk.py to talk to the models
-data/            training corpus (gitignored)
+data/            training corpus (gitignored), except data/chat/: the hand-written conversations
+                 and preference pairs
 checkpoints/     weights (gitignored)
 ```
 

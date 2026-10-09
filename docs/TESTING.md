@@ -10,7 +10,7 @@ Every command here was run and passes. Paths assume you are in `C:\Users\phone\D
 .venv/Scripts/python -m pytest tests/ -q
 ```
 
-434 tests, about 70 seconds, all on the CPU. If this is green, the implementation is correct as
+480 tests, about 70 seconds, all on the CPU. If this is green, the implementation is correct as
 far as anything can tell you without training a model -- and that now includes training: both
 training commands are run end to end on tiny models, killed, resumed, and compared with runs that
 never stopped.
@@ -58,7 +58,8 @@ it, because coverage only watches the main process.
 
 ## The tests that actually matter
 
-Most of them are shape checks. These six are the ones that would catch a real disaster:
+Most of them are shape checks. The ones in the table below would catch a real disaster; this
+command runs six of the fastest:
 
 ```bash
 .venv/Scripts/python -m pytest tests/ -k "causality or manual_matches_sdpa or layernorm_matches_pytorch or repeated_batch or identical_to_uncached or rope_config_is_refused" -v
@@ -83,6 +84,9 @@ Most of them are shape checks. These six are the ones that would catch a real di
 | `untied_merge_reproduces_the_trained_model_exactly` | merging an adapter into tied embeddings, which silently changes the model you talk to from the one you trained |
 | `a_kill_mid_save_leaves_the_last_good_checkpoint` | a 1.1 GB checkpoint half-written when stop.bat kills training |
 | `untrained_markers_are_reseeded` | ChatML markers left as noise in a base model's embedding table, so the model answers correctly and can never stop |
+| `the_gradient_raises_chosen_and_lowers_rejected` | preference tuning with the sign flipped: the bad answer trained up, and the loss falls just as nicely |
+| `a_killed_and_resumed_run_ends_identical_to_an_unbroken_one` (DPO) | a resumed DPO run rebuilding its reference from the half-tuned model, which quietly changes what it optimizes |
+| `samples_can_be_written_to_a_log_in_the_windows_code_page` | a chat run that dies at its first sample print, before saving, because the log cannot encode Burmese |
 
 ### The failure mode these are aimed at
 
