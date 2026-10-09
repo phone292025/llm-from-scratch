@@ -265,7 +265,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--data", default="data/chat/preferences.jsonl")
     p.add_argument("--out", default="checkpoints/chat-dpo")
     p.add_argument("--beta", type=float, default=0.1)
-    p.add_argument("--lr", type=float, default=5e-5)
+    # notes/09 section 8: 5e-5 broke skills no pair was about; 5e-6 changed no reply at all.
+    p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--batch-size", type=int, default=2, help="pairs per micro-batch")
     p.add_argument("--accum", type=int, default=4)
