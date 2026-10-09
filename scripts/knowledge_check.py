@@ -26,7 +26,6 @@ import argparse
 import itertools
 import os
 import re
-import sys
 import time
 from pathlib import Path
 
@@ -34,11 +33,10 @@ import torch
 
 from llm.chat_data import IM_END, render
 from llm.chat_infer import ReplyStreamer, base_of, load_chat_model
-from llm.console import use_utf8
+from llm.console import Tee, use_utf8
 
 GREY, BLUE, GREEN, RED, YELLOW, BOLD, OFF = (
     "\033[90m", "\033[94m", "\033[92m", "\033[91m", "\033[93m", "\033[1m", "\033[0m")
-ANSI = re.compile(r"\033\[[0-9;]*m")
 
 NOT_KNOWING = ["not aware", "don't know", "do not know", "no information", "not familiar",
                "couldn't find", "could not find", "not sure", "no record", "fictional",
@@ -177,21 +175,6 @@ def rescore(paths: list[str]) -> None:
                 marks.append("·")
         print(f"  {n:>2}" + "".join(f"{m:>3}" for m in marks) + f"   {turns[-1][:60]}")
     print("\n    " + "".join(f"{totals[k]:>3}" for k in logs) + f"   of {len(TESTS)}")
-
-
-class Tee:
-    """Write to the screen and, without colour codes, to the log."""
-
-    def __init__(self, log) -> None:
-        self.log = log
-
-    def write(self, text: str) -> None:
-        sys.stdout.write(text)
-        self.log.write(ANSI.sub("", text))
-
-    def flush(self) -> None:
-        sys.stdout.flush()
-        self.log.flush()
 
 
 def main() -> None:

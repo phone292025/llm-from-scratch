@@ -11,7 +11,9 @@ most of what the demos do.
 
 from __future__ import annotations
 
+import re
 import sys
+from typing import TextIO
 
 
 def use_utf8() -> None:
@@ -32,3 +34,34 @@ def use_utf8() -> None:
             except (ValueError, OSError):
                 # Redirected to something that cannot be reconfigured; printing still works.
                 pass
+
+
+#: Terminal colour codes, which make a live run readable and a saved log unreadable.
+ANSI = re.compile(r"\033\[[0-9;]*m")
+
+
+class Tee:
+    """Write to the screen in colour and to a log without it, so a live, coloured run -- the
+    knowledge check, the model's own answers -- leaves a plain record behind."""
+
+    def __init__(self, log: TextIO) -> None:
+        self.log = log
+
+    def write(self, text: str) -> None:
+        sys.stdout.write(text)
+        self.log.write(ANSI.sub("", text))
+
+    def flush(self) -> None:
+        sys.stdout.flush()
+        self.log.flush()
+
+
+if __name__ == "__main__":
+    import io
+
+    use_utf8()
+    log = io.StringIO()
+    out = Tee(log)
+    out.write("\033[94mLLM ›\033[0m မင်္ဂလာပါ "
+              "-- coloured here, and Burmese prints\n")
+    print(f"the log holds: {log.getvalue()!r}")

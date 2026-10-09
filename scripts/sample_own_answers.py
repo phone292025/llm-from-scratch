@@ -21,8 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
-import sys
 import time
 from pathlib import Path
 
@@ -30,25 +28,9 @@ import torch
 
 from llm.chat_data import IM_END, render
 from llm.chat_infer import ReplyStreamer, base_of, load_chat_model
-from llm.console import use_utf8
+from llm.console import Tee, use_utf8
 
 GREY, BLUE, BOLD, OFF = "\033[90m", "\033[94m", "\033[1m", "\033[0m"
-ANSI = re.compile(r"\033\[[0-9;]*m")
-
-
-class Tee:
-    """Write to the screen and, without colour codes, to the log."""
-
-    def __init__(self, log) -> None:
-        self.log = log
-
-    def write(self, text: str) -> None:
-        sys.stdout.write(text)
-        self.log.write(ANSI.sub("", text))
-
-    def flush(self) -> None:
-        sys.stdout.flush()
-        self.log.flush()
 
 
 def main() -> None:
