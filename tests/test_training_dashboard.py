@@ -73,6 +73,16 @@ def test_a_half_written_metrics_line_is_skipped(run) -> None:
     assert [step for step, _ in status["train"]] == [0, 100]
 
 
+def test_a_stopped_run_shows_no_time_left(run) -> None:
+    """Stopped at step 400 to resume later: the countdown must not keep running."""
+    import os
+
+    quiet = time.time() - 600
+    os.utime(run / "train.log", (quiet, quiet))
+    status = dashboard.Run(run, started=time.time() - 1000).status()
+    assert status["stopped"] and status["eta_seconds"] is None and status["done"] == 101
+
+
 def test_a_finished_run_shows_no_time_left(run) -> None:
     with (run / "train.log").open("a", encoding="utf-8") as log:
         log.write("\ndone in 95.0 min -> checkpoints/chat-v2/step-000806/adapter\n")

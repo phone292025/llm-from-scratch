@@ -89,16 +89,22 @@ class Run:
         metrics = read_metrics(self.folder / "metrics.jsonl")
         done = int(steps[-1].group(1)) + 1 if steps else 0
         finished = "done in" in text
-        if self.started is None and not finished:
+        # A running log changes every ten steps, about a minute and a half; validation adds a
+        # minute more. Four quiet minutes means stopped -- and a resume is a new process, whose
+        # start the time-left estimate must be measured from.
+        stopped = not finished and time.time() - (self.folder / "train.log").stat().st_mtime > 240
+        if stopped:
+            self.started = None
+        elif self.started is None and not finished:
             self.started = training_started()
         eta = None
-        if self.started and done and total and not finished:
+        if self.started and done and total and not finished and not stopped:
             per_step = (time.time() - self.started) / done
             eta = (total - done) * per_step
         sample_step, samples = last_samples(log)
         return {
             "run": self.folder.name, "total": total, "done": total if finished else done,
-            "finished": finished, "eta_seconds": eta,
+            "finished": finished, "stopped": stopped, "eta_seconds": eta,
             "eta_clock": datetime.fromtimestamp(time.time() + eta).strftime("%H:%M") if eta else None,
             "elapsed_seconds": time.time() - self.started if self.started else None,
             "loss": float(steps[-1].group(2)) if steps else None,
@@ -190,11 +196,12 @@ async function tick() {
   try {
     const s = await (await fetch("/status")).json();
     $("title").textContent = `Training ${s.run}`;
-    $("sub").textContent = s.finished ? "Finished." :
+    $("sub").textContent = s.finished ? "Finished." : s.stopped ?
+      `Stopped at step ${s.done}. resume.bat continues from the last checkpoint.` :
       `Running for ${fmt(s.elapsed_seconds)}` + (s.eta_clock ? ` · expected to finish around ${s.eta_clock}` : "");
     $("steps").textContent = s.total ? `${s.done} / ${s.total}` : s.done;
     $("left").textContent = s.total ? Math.max(s.total - s.done, 0) : "–";
-    $("eta").textContent = s.finished ? "done" : fmt(s.eta_seconds);
+    $("eta").textContent = s.finished ? "done" : s.stopped ? "stopped" : fmt(s.eta_seconds);
     $("fill").style.width = s.total ? `${100 * s.done / s.total}%` : "0";
     $("loss").textContent = s.loss != null ? s.loss.toFixed(4) : "–";
     $("val").textContent = s.val.length ? s.val[s.val.length - 1][1].toFixed(4) : "–";
