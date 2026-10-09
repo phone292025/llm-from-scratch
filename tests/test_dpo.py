@@ -325,6 +325,53 @@ def test_every_pair_fits_the_default_max_len_whole() -> None:
             assert text.isascii() and len(text) < 512, text[:60]
 
 
+# --- pairs built from the model's own answers ----------------------------------------------------
+
+OWN = Path("data/chat/own_answers.jsonl")
+ONPOLICY = Path("data/chat/preferences_onpolicy.jsonl")
+
+
+def _onpolicy_builder():
+    spec = importlib.util.spec_from_file_location("make_onpolicy_pairs",
+                                                  "scripts/make_onpolicy_pairs.py")
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    return builder
+
+
+def test_every_prompt_has_the_model_s_answer_and_a_verdict() -> None:
+    own, pairs = load_records(OWN), load_records(DATA)
+    assert [o["messages"] for o in own] == [p["messages"] for p in pairs]
+    assert all(o["verdict"] in ("good", "bad") and o["why"].strip() for o in own)
+
+
+def test_the_onpolicy_file_is_what_its_builder_writes() -> None:
+    builder = _onpolicy_builder()
+    assert load_records(ONPOLICY) == builder.build(load_records(DATA), load_records(OWN))
+
+
+def test_only_answers_judged_bad_are_lowered() -> None:
+    """The point of the file: the rejected side is the model's own mistake. And only a mistake --
+    lowering an answer that is fine would teach the model to stop giving it."""
+    trim = _onpolicy_builder().trim
+    for pair, own, made in zip(load_records(DATA), load_records(OWN), load_records(ONPOLICY),
+                               strict=True):
+        assert made["chosen"] == pair["chosen"]
+        if own["verdict"] == "bad":
+            assert made["rejected"] == (own["answer"] if own["finished"] else trim(own["answer"]))
+        else:
+            assert made == pair
+    assert [problem_with(r) for r in load_records(ONPOLICY)] == [None] * len(load_records(OWN))
+
+
+def test_a_cut_off_reply_ends_at_its_last_full_sentence() -> None:
+    trim = _onpolicy_builder().trim
+    assert trim("He was born in 1766. He studied at the") == "He was born in 1766."
+    assert trim("Version 2.5 is out. And") == "Version 2.5 is out."
+    assert trim('It is "done." Then') == 'It is "done."'
+    assert trim("no sentence ends here") == "no sentence ends here"
+
+
 # --- the whole command, end to end, on the tiny CPU model ----------------------------------------
 
 PAIRS = [

@@ -402,19 +402,21 @@ def test_checkpoints_record_their_recipe(tmp_path, opt) -> None:
     assert json.loads((final / "state.json").read_text())["data_recipe"] == 1
 
 
-#: Every file of hand-written training data: the chat conversations and the DPO preference pairs.
-HAND_WRITTEN = ["data/chat/persona.jsonl", "data/chat/preferences.jsonl"]
+#: Every file of chat training data in the repo: the hand-written conversations, the DPO pairs,
+#: and the model's own answers that the on-policy pairs are built from.
+TRAINING_DATA = ["data/chat/persona.jsonl", "data/chat/preferences.jsonl",
+                 "data/chat/own_answers.jsonl", "data/chat/preferences_onpolicy.jsonl"]
 
 
 def trained_texts(normal) -> set[str]:
-    """Every turn, chosen answer and rejected answer in the hand-written data, normalized."""
+    """Every turn and every answer in the training data, normalized."""
     texts = set()
-    for path in HAND_WRITTEN:
+    for path in TRAINING_DATA:
         for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
             if line.strip():
                 row = json.loads(line)
                 texts |= {normal(m["content"]) for m in row["messages"]}
-                texts |= {normal(row[k]) for k in ("chosen", "rejected") if k in row}
+                texts |= {normal(row[k]) for k in ("chosen", "rejected", "answer") if k in row}
     return texts
 
 
