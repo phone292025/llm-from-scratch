@@ -34,6 +34,7 @@ from llm.chat_sft import (
     data_fingerprint,
     epoch_batches,
     init_chat_tokens,
+    names_another_assistant,
     oasst_conversations,
     save_checkpoint,
     split_records,
@@ -386,8 +387,54 @@ def test_recipe_one_really_did_leak(sources) -> None:
     assert set(_keys(val)) & set(_keys(train))
 
 
-def test_new_runs_use_the_leak_free_recipe() -> None:
-    assert DATA_RECIPE == 2
+def test_new_runs_use_the_newest_recipe() -> None:
+    assert DATA_RECIPE == 3
+
+
+def _claims(tag: str) -> dict:
+    return {"messages": [{"role": "user", "content": f"who are you? {tag}"},
+                         {"role": "assistant",
+                          "content": "I'm an AI language model developed by Open Assistant."}]}
+
+
+def test_recipe_three_drops_assistants_that_name_open_assistant(sources) -> None:
+    """OASST2's assistant was Open Assistant and says so; fine-tuned on it, the model did too."""
+    persona, external = sources
+    claims = [_claims(str(i)) for i in range(30)]
+    train, val = split_records(persona, external + claims, repeat=25, val_size=40, seed=0,
+                               recipe=3)
+    assert not set(_keys(claims)) & set(_keys(train + val))
+    assert len(train) + len(val) == 25 * len(persona) + len(external)
+    assert not set(_keys(val)) & set(_keys(train)), "still split first, like recipe 2"
+    two_train, two_val = split_records(persona, external + claims, repeat=25, val_size=40, seed=0,
+                                       recipe=2)
+    assert set(_keys(claims)) <= set(_keys(two_train + two_val)), "recipe 2 keeps them"
+
+
+def test_only_the_assistant_s_words_count() -> None:
+    asked = {"messages": [{"role": "user", "content": "is Open Assistant better than you?"},
+                          {"role": "assistant", "content": "I can't compare myself to it."}]}
+    assert not names_another_assistant(asked)
+    assert names_another_assistant(_claims("x"))
+    assert names_another_assistant({"messages": [
+        {"role": "user", "content": "where is your code?"},
+        {"role": "assistant", "content": "See https://github.com/LAION-AI/Open-Assistant."}]})
+
+
+def test_recipe_two_is_kept_exactly_as_it_was(sources) -> None:
+    """The first chat model was trained on recipe 2; its data must stay rebuildable, record for
+    record. This is the original function, inline."""
+    import random
+
+    persona, external = sources
+    rng = random.Random(0)
+    shuffled = list(external)
+    rng.shuffle(shuffled)
+    n = min(40, len(shuffled) // 10)
+    expected_train = persona * 25 + shuffled[n:]
+    rng.shuffle(expected_train)
+    train, val = split_records(persona, external, repeat=25, val_size=40, seed=0, recipe=2)
+    assert _keys(train) == _keys(expected_train) and _keys(val) == _keys(shuffled[:n])
 
 
 def test_an_unknown_recipe_is_refused(sources) -> None:

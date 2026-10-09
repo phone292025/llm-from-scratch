@@ -33,6 +33,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -82,7 +83,21 @@ HELDOUT_PROMPTS = [
 #:      conversations the model also trained on, so validation loss partly measured recall.
 #:   2  split first, validation from the external data only, then repeat the hand-written set
 #:      into training. Nothing in validation is ever trained on.
-DATA_RECIPE = 2
+#:   3  recipe 2, after dropping every external conversation whose assistant names Open Assistant
+#:      or LAION: 73 of 3,000 OASST2 conversations. Fine-tuned on them, the model answered "who
+#:      developed you" with "Open Assistant" (notes/09 section 8).
+DATA_RECIPE = 3
+
+#: OASST2's assistant was Open Assistant, by LAION, and says so: "I'm an AI language model
+#: developed by Open Assistant", "all of my code can be found on my GitHub page".
+OTHER_ASSISTANT = re.compile(r"open ?assistant|laion", re.IGNORECASE)
+
+
+def names_another_assistant(record: dict) -> bool:
+    """Whether an assistant turn mentions Open Assistant or LAION. In OASST2 that is nearly always
+    the assistant describing itself; a user asking about it is fine."""
+    return any(m["role"] == "assistant" and OTHER_ASSISTANT.search(m["content"])
+               for m in record["messages"])
 
 
 def split_records(
@@ -97,9 +112,9 @@ def split_records(
         rng.shuffle(records)
         n = min(val_size, len(records) // 10)
         return records[n:], records[:n]
-    if recipe != 2:
+    if recipe not in (2, 3):
         raise ValueError(f"unknown data recipe {recipe}")
-    external = list(external)
+    external = [r for r in external if recipe == 2 or not names_another_assistant(r)]
     rng.shuffle(external)
     n = min(val_size, len(external) // 10)
     train = persona * repeat + external[n:]
@@ -176,6 +191,9 @@ def load_sources(args, tok, recipe: int = DATA_RECIPE) -> tuple[list[dict], list
         ds = load_dataset("OpenAssistant/oasst2", split="train")
         external += oasst_conversations(ds, args.oasst)
         print(f"oasst2      up to {args.oasst} conversations")
+    if recipe >= 3:
+        print(f"filtered    {sum(map(names_another_assistant, external))} where the assistant "
+              f"names Open Assistant or LAION")
 
     return split_records(persona, external, args.persona_repeat, args.val_size, args.seed, recipe)
 
