@@ -88,6 +88,11 @@ class Run:
         steps = [m for line in log if (m := STEP.match(line))]
         metrics = read_metrics(self.folder / "metrics.jsonl")
         done = int(steps[-1].group(1)) + 1 if steps else 0
+        pointer = self.folder / "latest.json"
+        if pointer.exists():
+            # The log prints every tenth step, so a run stopped just after a save is further on
+            # than its last log line: stopped at step 400, the log's last word is step 390.
+            done = max(done, json.loads(pointer.read_text(encoding="utf-8")).get("step", 0))
         finished = "done in" in text
         # A running log changes every ten steps, about a minute and a half; validation adds a
         # minute more. Four quiet minutes means stopped -- and a resume is a new process, whose

@@ -81,6 +81,9 @@ def test_a_stopped_run_shows_no_time_left(run) -> None:
     os.utime(run / "train.log", (quiet, quiet))
     status = dashboard.Run(run, started=time.time() - 1000).status()
     assert status["stopped"] and status["eta_seconds"] is None and status["done"] == 101
+    # Stopped right after the step-200 save: the log's last step line is older than that.
+    (run / "latest.json").write_text(json.dumps({"dir": "step-000200", "step": 200}))
+    assert dashboard.Run(run, started=time.time()).status()["done"] == 200
 
 
 def test_a_finished_run_shows_no_time_left(run) -> None:
