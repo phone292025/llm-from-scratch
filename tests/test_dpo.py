@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -290,6 +291,29 @@ def test_the_data_also_punishes_needless_refusals() -> None:
     calibrating = [r for r in records if any(w in r["rejected"].lower() for w in refusal)
                    and not any(w in r["chosen"].lower() for w in refusal)]
     assert len(calibrating) >= 10
+
+
+REFUSAL_OPENING = re.compile(
+    r"\W*(no\b|not\b|nobody|nothing|none\b|i (don't|can't|cannot|have no|haven't)|i'm (not|unable)"
+    r"|i've never|there's no|there is no|that's not|you haven't|you've only)")
+
+
+def test_style_does_not_give_the_answer_away() -> None:
+    """DPO learns whatever separates chosen from rejected, wanted or not. The first version of the
+    pairs had " -- " in 33 of 69 chosen answers against 4 rejected, and opened 37 chosen answers
+    with a refusal against 7 rejected. The tuned model put dashes everywhere and answered a valid
+    question with "There's no Cisco IOS". Surface features must be about as common on both sides."""
+    records = load_records(DATA)
+
+    def share(has) -> tuple[float, float]:
+        return tuple(sum(bool(has(r[k])) for r in records) / len(records)
+                     for k in ("chosen", "rejected"))
+
+    assert share(lambda t: "--" in t) == (0, 0)
+    chosen, rejected = share(lambda t: REFUSAL_OPENING.match(t.lower()))
+    assert abs(chosen - rejected) < 0.15, (chosen, rejected)
+    longer = sum(len(r["chosen"]) > len(r["rejected"]) for r in records) / len(records)
+    assert 0.35 < longer < 0.65, f"the chosen answer is the longer one in {longer:.0%} of pairs"
 
 
 def test_every_pair_fits_the_default_max_len_whole() -> None:
