@@ -16,6 +16,7 @@ is nothing to train. These tests exist so it cannot come back.
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 
 import pytest
@@ -585,6 +586,17 @@ def test_chat_validation_loss_is_the_mean_over_graded_tokens(tiny_base, persona)
     got = evaluate(model, batches, data, tok.pad_token_id, "cpu", limit=len(batches))
     assert got == pytest.approx(total / count, rel=1e-5)
     assert model.training, "evaluate must hand the model back in training mode"
+    assert math.isnan(evaluate(model, [], data, tok.pad_token_id, "cpu", limit=1)), \
+        "nothing scored has no mean -- not a perfect 0"
+
+
+def test_a_run_without_validation_data_reports_no_validation_loss(finished_run) -> None:
+    """Validation comes from the external data only, so a persona-only run has none. It used to
+    print "val loss 0.0000  perplexity 1.00" every eval: a perfect score, measured on nothing."""
+    run, _ = finished_run
+    rows = [json.loads(line) for line in (run / "metrics.jsonl").read_text().splitlines()]
+    assert [r for r in rows if r["kind"] == "train"]
+    assert not [r for r in rows if r["kind"] == "eval"]
 
 
 def test_the_knowledge_quiz_is_not_in_the_training_data() -> None:

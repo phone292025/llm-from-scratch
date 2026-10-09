@@ -293,7 +293,8 @@ def evaluate(model, batches, data, pad_id, device, limit: int) -> float:
                                  ignore_index=IGNORE, reduction="sum").item()
         tokens += int((y != IGNORE).sum())
     model.train()
-    return total / max(tokens, 1)
+    # Nothing scored has no mean. The old `max(tokens, 1)` turned it into a perfect 0.0000.
+    return total / tokens if tokens else float("nan")
 
 
 def epoch_batches(data, batch_size: int, seed: int, epoch: int) -> list[list[int]]:
@@ -423,7 +424,9 @@ def prepare_data(args: argparse.Namespace, tok, found: Path | None) -> RunData:
     graded = sum(sum(1 for t in labels if t != IGNORE) for _, labels in train.examples)
     print(f"train       {len(train):,} conversations, {tokens:,} tokens "
           f"({graded:,} graded, {graded / max(tokens, 1):.0%})")
-    print(f"val         {len(val):,} conversations")
+    print(f"val         {len(val):,} conversations"
+          + ("" if len(val) else " -- no validation loss this run; it comes from the external "
+                                 "data only"))
     print(f"dropped     {train.dropped + val.dropped:,} unusable rows")
     return RunData(train, val, recipe, fingerprint)
 
@@ -570,7 +573,7 @@ def run_training(args: argparse.Namespace, model, opt, tok, data: RunData, out: 
                       f"{rate:>8,.0f} graded tok/s", flush=True)
                 record(kind="train", step=step, loss=running, lr=lr_at(step))
 
-            if args.eval_every and (step + 1) % args.eval_every == 0:
+            if args.eval_every and len(data.val) and (step + 1) % args.eval_every == 0:
                 val = evaluate(model, val_batches, data.val, pad_id, device, limit=args.val_batches)
                 print(f"    val loss {val:.4f}   perplexity {math.exp(val):.2f}", flush=True)
                 record(kind="eval", step=step, loss=val)
